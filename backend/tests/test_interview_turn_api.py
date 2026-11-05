@@ -761,16 +761,17 @@ def test_logs_and_call_records_hold_no_content(
     assert "7f3a" not in json.dumps([dict(r) for r in rows], default=str)
 
 
-def test_turn_routes_not_served_in_production() -> None:
+def test_turn_routes_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = TestClient(create_app(Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x",
                                           environment="production")),
                       headers={"Origin": "http://localhost:3000"})
     sid_ = uuid.uuid4()
-    assert prod.post(f"/api/interview-sessions/{sid_}/questions/next", json={}).status_code == 404
-    assert prod.post(f"/api/interview-sessions/{sid_}/answers", json={}).status_code == 404
-    assert prod.get(f"/api/interview-sessions/{sid_}/questions").status_code == 404
+    assert prod.post(f"/api/interview-sessions/{sid_}/questions/next", json={}).status_code == 401
+    assert prod.post(f"/api/interview-sessions/{sid_}/answers", json={}).status_code == 401
+    assert prod.get(f"/api/interview-sessions/{sid_}/questions").status_code == 401
     assert prod.put(f"/api/interview-sessions/{sid_}/ai-consent",
-                    json={"granted": True}).status_code == 404
+                    json={"granted": True}).status_code == 401
 
 
 def test_database_unavailable_is_503(dead_database_client: TestClient) -> None:
@@ -846,7 +847,7 @@ def _committed(**overrides: object) -> Iterator[tuple[uuid.UUID, list]]:
         app.dependency_overrides.pop(get_model_gateway, None)
         with SessionLocal() as db:
             db.execute(text("DELETE FROM candidates WHERE id = :i"), {"i": ids[0]})
-            db.execute(text("DELETE FROM provider_calls WHERE model = 'gated-interviewer'"))
+            db.execute(text("DELETE FROM provider_calls"))
             db.commit()
 
 

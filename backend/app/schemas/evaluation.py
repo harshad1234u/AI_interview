@@ -1,8 +1,8 @@
 """Answer evaluation contracts (Phase 8): the only shape a model may return, and the API views.
 
 The model output carries evaluation content only. There is no field for an overall score, a
-technical-correctness score, a recommended follow-up, an action, a status or a finish reason
-(plan C-E1..C-E4), and unknown fields are rejected.
+recommended follow-up, an action, a status or a finish reason (plan C-E1..C-E4), and unknown
+fields are rejected.
 """
 
 import uuid
@@ -100,6 +100,13 @@ class EvaluationResult(BaseModel):
     evaluation: EvaluationView | None  # None for NOT_APPLICABLE
     notice: str | None  # PRD §31 message when AI evaluation was unavailable
     model_calls: list[ModelCallSummary]  # empty when no model was asked
+
+
+class BatchEvaluationResult(BaseModel):
+    session_id: uuid.UUID
+    total_evaluated: int
+    evaluations: list[EvaluationResult]
+    notices: list[str]
 
 
 class AnswerEvaluationItem(BaseModel):

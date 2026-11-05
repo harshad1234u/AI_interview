@@ -206,6 +206,7 @@ The PRD names the report sections and nothing else.
 | Not answered | "Not answered: the interview ended first." |
 | Not asked | "Not asked in this interview." |
 | Concept | "Practise explaining {concept} with an example." |
+| `technical_accuracy` | "Practise explaining technical concepts, algorithms and trade-offs accurately." |
 | `relevance` | "Practise answering the question that was asked before adding detail." |
 | `completeness` | "Practise covering each part of the question." |
 | `reasoning` | "Practise explaining why, not only what." |

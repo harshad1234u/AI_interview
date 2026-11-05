@@ -1,37 +1,55 @@
+"use client";
+
+import Link from "next/link";
 import BackendStatus from "@/components/BackendStatus";
 import CandidateProfile from "@/components/CandidateProfile";
-import Core3D from "@/components/Core3D";
-
-const STEPS = [
-  { n: 1, title: "Build your profile", text: "Type your skills and projects or upload a resume, then approve what we found." },
-  { n: 2, title: "Plan an interview", text: "Pick the type, difficulty and length. Optionally turn on AI help." },
-  { n: 3, title: "Talk or type", text: "Hear each question and answer by voice, or type. Pause any time." },
-  { n: 4, title: "Get clear feedback", text: "Quotes from your answers, what to practise, then retry those topics." },
-];
+import LandingPage from "@/components/LandingPage";
+import { useAuth } from "@/components/AuthProvider";
 
 export default function Home() {
+  const { candidate } = useAuth();
+
+  // Loading auth session state
+  if (candidate === undefined) {
+    return (
+      <main id="content" style={{ minHeight: "60vh", display: "grid", placeItems: "center" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem" }}>
+          <div className="badge badge-primary">Checking Session…</div>
+          <p className="hint">Connecting to AI Interview Coach platform…</p>
+        </div>
+      </main>
+    );
+  }
+
+  // Visitor not logged in: display the comprehensive SaaS landing page
+  if (candidate === null) {
+    return (
+      <main id="content">
+        <LandingPage />
+      </main>
+    );
+  }
+
+  // Authenticated candidate: display the candidate dashboard & profile workspace
   return (
     <main id="content">
-      <section className="hero">
-        <div className="hero-text">
-          <p className="eyebrow">Practice · not a test</p>
-          <h1>AI Interview Coach</h1>
-          <p className="lead">
-            Practice realistic, role-specific interviews and understand exactly how to improve.
-          </p>
+      {/* Dashboard Welcome Header */}
+      <div className="dashboard-header">
+        <div>
+          <span className="eyebrow">Candidate Dashboard</span>
+          <h1 style={{ fontSize: "1.75rem", marginTop: "0.25rem" }}>
+            Welcome, {candidate.name}
+          </h1>
+          <p className="hint">Manage your profile facts, review resume skills, and take practice interviews.</p>
         </div>
-        <Core3D className="core3d-hero" />
-        <ol className="journey" aria-label="How it works">
-          {STEPS.map((s) => (
-            <li key={s.n} data-tilt>
-              <span className="journey-n" aria-hidden="true">{s.n}</span>
-              <strong>{s.title}</strong>
-              <span className="hint">{s.text}</span>
-            </li>
-          ))}
-        </ol>
-      </section>
-      <BackendStatus />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <BackendStatus />
+          <Link href="/interview" className="button-link primary" style={{ padding: "0.65rem 1.25rem" }}>
+            Start Practice Interview →
+          </Link>
+        </div>
+      </div>
+
       <CandidateProfile />
     </main>
   );

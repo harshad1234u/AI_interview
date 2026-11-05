@@ -35,12 +35,12 @@ def get_candidate(
 def candidate_write(db: Session) -> Iterator[None]:
     """Commits what the block wrote. A duplicate email is a 409; other constraint errors a 500."""
     try:
-        yield
+        with db.begin_nested():
+            yield
         db.commit()
     except IntegrityError as exc:
-        db.rollback()
         constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-        if constraint == EMAIL_UNIQUE_CONSTRAINT:
+        if constraint in (EMAIL_UNIQUE_CONSTRAINT, "uq_candidates_email", "uq_candidates_email_active"):
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "A candidate with this email already exists"
             ) from None

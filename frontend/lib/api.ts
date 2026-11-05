@@ -1,7 +1,8 @@
 import { LOGIN_PATH, shouldRedirectToLogin } from "@/lib/auth";
+import { getApiEndpoint } from "@/lib/endpoint";
 import type { Observation } from "@/lib/expressions";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
+export { getApiEndpoint };
 
 export type Health = {
   status: "ok" | "degraded";
@@ -68,12 +69,17 @@ export type FactReview = { fact?: string; status?: "APPROVED" | "REJECTED" };
 
 /** status 0 = the request never got a response (network down, backend off, misconfigured). */
 export class ApiError extends Error {
+  status: number;
+  fieldErrors: Partial<Record<string, string>>;
+
   constructor(
-    public status: number,
+    status: number,
     message: string,
-    public fieldErrors: Partial<Record<string, string>> = {},
+    fieldErrors: Partial<Record<string, string>> = {},
   ) {
     super(message);
+    this.status = status;
+    this.fieldErrors = fieldErrors;
   }
 }
 
@@ -98,10 +104,12 @@ function toApiError(status: number, body: unknown): ApiError {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (!API_URL) throw new ApiError(0, "App is misconfigured: NEXT_PUBLIC_API_URL is not set.");
+  const base = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (!base) throw new ApiError(0, "App is misconfigured: NEXT_PUBLIC_API_URL is not set.");
   let res: Response;
+  const endpoint = getApiEndpoint(path);
   try {
-    res = await fetch(`${API_URL}${path}`, {
+    res = await fetch(endpoint, {
       ...init,
       // FormData bodies must let the browser set the multipart Content-Type (with its boundary).
       headers:
@@ -127,8 +135,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function getHealth(signal?: AbortSignal): Promise<Health> {
-  if (!API_URL) throw new Error("NEXT_PUBLIC_API_URL is not configured");
-  const res = await fetch(`${API_URL}/api/health`, { signal, cache: "no-store" });
+  const base = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (!base) throw new Error("NEXT_PUBLIC_API_URL is not configured");
+  const endpoint = getApiEndpoint("/api/health");
+  const res = await fetch(endpoint, { signal, cache: "no-store" });
   // 503 still carries a well-formed Health body (database unavailable).
   if (!res.ok && res.status !== 503) throw new Error(`Unexpected status ${res.status}`);
   return (await res.json()) as Health;
@@ -136,14 +146,39 @@ export async function getHealth(signal?: AbortSignal): Promise<Health> {
 
 // ---------- authentication (backend Phase 12) ----------
 
-/** Creates the profile and signs in (the server sets the session cookie). */
+export type RegisterResponse = {
+  email: string;
+  verification_required: boolean;
+  message: string;
+};
+
+/** Creates the Supabase Auth profile and sends verification email. */
 export const register = (input: RegisterInput) =>
-  request<Candidate>("/api/auth/register", { method: "POST", body: JSON.stringify(input) });
+  request<RegisterResponse>("/api/auth/register", { method: "POST", body: JSON.stringify(input) });
+
+/** Confirms email verification via POST to complete account activation without prefetch consumption. */
+export const confirmEmailVerification = (payload: { token_hash: string; type?: string; csrf_token?: string }) =>
+  request<{ status: string; redirect_url: string }>("/api/auth/verify", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 
 export const login = (input: LoginInput) =>
   request<Candidate>("/api/auth/login", { method: "POST", body: JSON.stringify(input) });
 
 export const logout = () => request<void>("/api/auth/logout", { method: "POST" });
+
+export const forgotPassword = (email: string) =>
+  request<{ message: string }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+
+export const resetPassword = (accessToken: string, newPassword: string) =>
+  request<{ message: string }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ access_token: accessToken, new_password: newPassword }),
+  });
 
 /** Who is signed in: the only source of the candidate's identity. 401 when nobody is. */
 export const getMe = (signal?: AbortSignal) => request<Candidate>("/api/auth/me", { signal });
@@ -377,6 +412,7 @@ export type AnswerKind = "ANSWER" | "CLARIFY" | "DONT_KNOW" | "SKIP";
 export type QuestionKind = "TOPIC" | "FOLLOW_UP" | "REPHRASE";
 export type EvaluationStatus = "NOT_EVALUATED" | "NOT_APPLICABLE" | "OBSERVATIONS_ONLY" | "EVALUATED";
 export type Criterion =
+  | "technical_accuracy"
   | "relevance"
   | "completeness"
   | "reasoning"
@@ -466,6 +502,21 @@ type CriterionItem = ItemRef & {
   evidence: string[];
 };
 export type Unavailable = { available: false; note: string };
+export type AvailableSpeechMetrics = {
+  available: true;
+  note: string;
+  total_spoken_seconds: number;
+  average_wpm: number | null;
+  spoken_answers_count: number;
+};
+export type SpeechMetrics = Unavailable | AvailableSpeechMetrics;
+
+export type BatchEvaluationResult = {
+  session_id: string;
+  total_evaluated: number;
+  evaluations: EvaluationResult[];
+  notices: string[];
+};
 
 export type InterviewReport = {
   summary: {
@@ -513,7 +564,7 @@ export type InterviewReport = {
   })[];
   communication_observations: {
     answers: { question_id: string; seq: number; word_count: number; concepts_mentioned: string[] }[];
-    speech_metrics: Unavailable;
+    speech_metrics: SpeechMetrics;
   };
   topics_to_practise: {
     topic_position: number;
@@ -546,8 +597,11 @@ export const listInterviewSessions = (candidateId: string, signal?: AbortSignal)
   );
 
 /** For the signed-in candidate (the server refuses a candidate_id in the body). */
-export const createInterviewSession = () =>
-  request<InterviewSession>("/api/interview-sessions", post());
+export const createInterviewSession = (options?: { abandon_active?: boolean }) =>
+  request<InterviewSession>("/api/interview-sessions", post(options?.abandon_active ? { abandon_active: true } : {}));
+
+export const abandonInterviewSession = (id: string) =>
+  request<InterviewSession>(`${sessionPath(id)}/abandon`, post());
 
 export const getInterviewSession = (id: string, signal?: AbortSignal) =>
   request<InterviewSession>(sessionPath(id), { signal });
@@ -577,10 +631,23 @@ export const nextQuestion = (id: string) =>
   request<TurnResult>(`${sessionPath(id)}/questions/next`, post());
 
 // Only ANSWER carries text; the other kinds send none (the backend's contract).
-export const submitAnswer = (id: string, questionId: string, kind: AnswerKind, text?: string) =>
+export const submitAnswer = (
+  id: string,
+  questionId: string,
+  kind: AnswerKind,
+  text?: string,
+  speech_duration_ms?: number,
+  speech_wpm?: number,
+) =>
   request<AnswerResult>(
     `${sessionPath(id)}/answers`,
-    post(kind === "ANSWER" ? { question_id: questionId, kind, text } : { question_id: questionId, kind }),
+    post({
+      question_id: questionId,
+      kind,
+      ...(kind === "ANSWER" ? { text } : {}),
+      ...(speech_duration_ms !== undefined && speech_duration_ms > 0 ? { speech_duration_ms } : {}),
+      ...(speech_wpm !== undefined && speech_wpm > 0 ? { speech_wpm } : {}),
+    }),
   );
 
 export const getQuestions = (id: string, signal?: AbortSignal) =>
@@ -591,6 +658,9 @@ export const evaluateAnswer = (id: string, questionId: string) =>
     `${sessionPath(id)}/questions/${encodeURIComponent(questionId)}/evaluation`,
     post(),
   );
+
+export const batchEvaluateAnswers = (id: string) =>
+  request<BatchEvaluationResult>(`${sessionPath(id)}/evaluations/batch`, post());
 
 /** Counts only, from this browser's expression model, for one answered question. */
 export const saveExpressionObservation = (id: string, questionId: string, observation: Observation) =>

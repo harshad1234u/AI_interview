@@ -37,6 +37,8 @@ MAX_PROPOSALS = 2
 MAX_OUTPUT_TOKENS = 2048
 
 CRITERIA = {
+    Criterion.TECHNICAL_ACCURACY: "the technical statements, algorithms, architectures and concepts "
+                                  "are factually sound and technically accurate",
     Criterion.RELEVANCE: "the answer addresses the question that was asked",
     Criterion.COMPLETENESS: "the answer covers what the question asks for, including the "
                             "topic's planned concepts",
@@ -81,7 +83,7 @@ right or wrong. Never mention hiring, ranking or suitability. Never comment on e
 nervousness, confidence, personality or accent. Never mention gender, religion, caste, marital \
 status or photographs. No URLs, HTML or markdown. Do not name any technology, project or product \
 that is not in the topic data; refer to "your answer" instead.
-- There is no overall score and no technical-accuracy score.
+- There is no overall score.
 
 Reply with JSON only: {{"criteria": [{{"criterion": "...", "score": 1, "evidence": ["..."]}}], \
 "missing_concepts": [], "claims_to_verify": [], "feedback": "..."}}."""

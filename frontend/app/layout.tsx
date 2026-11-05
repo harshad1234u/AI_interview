@@ -1,13 +1,12 @@
 import type { Metadata } from "next";
 import AppHeader from "@/components/AppHeader";
 import AuthProvider from "@/components/AuthProvider";
-import MotionEffects from "@/components/MotionEffects";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI Interview Coach",
+  title: "AI Interview Coach — Professional Interview Preparation Platform",
   description:
-    "Practice realistic, role-specific interviews and understand exactly how to improve.",
+    "Master technical and behavioral interviews with role-specific AI practice, voice dialogue, and actionable feedback.",
 };
 
 // Runs before the first paint so the page never flashes the wrong theme: the saved choice, else
@@ -21,8 +20,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
       <body>
-        <div className="bg-blobs" aria-hidden="true"><span /><span /><span /></div>
-        <MotionEffects />
         <AuthProvider>
           <a className="skip-link" href="#content">Skip to the content</a>
           <AppHeader />

@@ -19,10 +19,36 @@ REGISTER = "/api/auth/register"
 
 
 def create(client: TestClient, email: str = EMAIL, name: str = "Harshad") -> dict:
-    """Registers (Phase 12: the only way to create a candidate), which also signs the client in."""
-    res = client.post(REGISTER, json={"email": email, "name": name, "password": PASSWORD})
-    assert res.status_code == 201, res.text
-    return res.json()
+    """Provisions a candidate and sets session cookie for candidate profile testing."""
+    from app.services.auth import start_session
+    from app.db.session import get_db, SessionLocal
+    from app.api.deps import SESSION_COOKIE
+    clean_email = email.strip().lower()
+    clean_name = " ".join(name.strip().split()) or "Harshad"
+    cand_id = uuid.uuid4()
+    auth_id = uuid.uuid4()
+    override = client.app.dependency_overrides.get(get_db)
+    if override:
+        db = next(override())
+        cand = Candidate(id=cand_id, email=clean_email, name=clean_name, auth_user_id=auth_id)
+        db.add(cand)
+        db.flush()
+        token = start_session(db, cand.id, cand.auth_user_id)
+        db.flush()
+    else:
+        with SessionLocal() as db:
+            cand = Candidate(id=cand_id, email=clean_email, name=clean_name, auth_user_id=auth_id)
+            db.add(cand)
+            db.commit()
+            token = start_session(db, cand.id, cand.auth_user_id)
+            db.commit()
+    client.cookies.set(SESSION_COOKIE, token)
+    return {
+        "id": str(cand.id),
+        "email": cand.email,
+        "name": cand.name,
+        "created_at": cand.created_at.isoformat() if cand.created_at else "2026-11-04T00:00:00Z",
+    }
 
 
 # ---------- create (registration) ----------
@@ -34,10 +60,8 @@ def test_create_returns_201_and_normalizes(client: TestClient) -> None:
     assert res.status_code == 201
     body = res.json()
     assert body["email"] == EMAIL
-    assert body["name"] == "Harshad Ambi"
-    uuid.UUID(body["id"])
-    assert body["created_at"]
-    assert set(body) == {"id", "email", "name", "created_at"}
+    assert body["verification_required"] is True
+    assert body["message"]
 
 
 @pytest.mark.parametrize(
@@ -65,7 +89,9 @@ def test_create_rejects_invalid_input(client: TestClient, payload: dict) -> None
 
 
 def test_create_accepts_max_length_name(client: TestClient) -> None:
-    assert create(client, name="x" * 200)["name"] == "x" * 200
+    res = client.post(REGISTER, json={"email": "maxname@example.com", "name": "x" * 200, "password": PASSWORD})
+    assert res.status_code == 201
+    assert res.json()["verification_required"] is True
 
 
 @pytest.mark.parametrize(
@@ -77,11 +103,11 @@ def test_create_rejects_server_controlled_fields(client: TestClient, extra: dict
 
 
 @pytest.mark.parametrize("dupe", [EMAIL, "HARSHAD@EXAMPLE.COM"])
-def test_create_duplicate_email_is_409(client: TestClient, dupe: str) -> None:
-    create(client)
+def test_create_duplicate_email_is_409(client: TestClient, fake_supabase, dupe: str) -> None:
+    fake_supabase.register_test_user(EMAIL)
     res = client.post(REGISTER, json={"email": dupe, "name": "Other", "password": PASSWORD})
     assert res.status_code == 409
-    assert res.json() == {"detail": "A candidate with this email already exists"}
+    assert res.json() == {"detail": "An account with this email already exists."}
 
 
 # ---------- read ----------
@@ -251,14 +277,13 @@ def test_unexpected_constraint_violation_is_500_without_personal_data(
     assert "Secret Person" not in caplog.text
 
 
-def test_candidate_routes_not_served_in_production() -> None:
+def test_candidate_routes_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = create_app(
         Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x", environment="production")
     )
     c = TestClient(prod, headers={"Origin": "http://localhost:3000"})
-    assert c.post(REGISTER, json={"email": EMAIL, "name": "H", "password": PASSWORD}
-                  ).status_code == 404
-    assert c.get(f"/api/candidates/{uuid.uuid4()}").status_code == 404
-    assert c.get("/api/auth/me").status_code == 404
+    assert c.get(f"/api/candidates/{uuid.uuid4()}").status_code == 401
+    assert c.get("/api/auth/me").status_code == 401
     # Control: the same request is routed outside production (and needs a session there).
     assert api_client().get("/api/candidates/not-a-uuid").status_code == 401

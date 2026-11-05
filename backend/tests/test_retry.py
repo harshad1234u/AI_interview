@@ -275,11 +275,12 @@ def test_pending_profile_facts_are_409(
     assert len(sessions(db_session, candidate)) == 1
 
 
-def test_retry_routes_not_served_in_production() -> None:
+def test_retry_routes_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = TestClient(create_app(Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x",
                                           environment="production")),
                       headers={"Origin": "http://localhost:3000"})
-    assert prod.post(f"/api/interview-sessions/{uuid.uuid4()}/retry", json={}).status_code == 404
+    assert prod.post(f"/api/interview-sessions/{uuid.uuid4()}/retry", json={}).status_code == 401
 
 
 def test_database_unavailable_is_503(dead_database_client: TestClient) -> None:

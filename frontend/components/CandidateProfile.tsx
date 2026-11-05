@@ -43,7 +43,7 @@ function Profile({ candidate }: { candidate: Candidate }) {
       setError("Something went wrong. Please try again.");
       return;
     }
-    if (err.status === 404) return signedOut(); // the profile no longer exists
+    if (err.status === 404) return signedOut();
     if (err.status === 409) {
       setFieldErrors({ email: err.message });
       setError("Please fix the highlighted fields.");
@@ -80,7 +80,7 @@ function Profile({ candidate }: { candidate: Candidate }) {
     setBusy(true);
     setError(null);
     try {
-      await deleteCandidate(candidate.id); // the server also ends every session of this account
+      await deleteCandidate(candidate.id);
       signedOut();
     } catch (err) {
       showError(err);
@@ -102,37 +102,67 @@ function Profile({ candidate }: { candidate: Candidate }) {
   );
 
   return (
-    <>
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+      {/* Quick Launch Practice Card */}
+      <section className="card active-session-banner" aria-labelledby="interview-heading">
+        <div>
+          <span className="badge badge-primary">Practice Hub</span>
+          <h2 id="interview-heading" style={{ fontSize: "1.35rem", marginTop: "0.4rem", color: "var(--text)" }}>
+            Ready for your next interview practice?
+          </h2>
+          <p className="hint" style={{ marginTop: "0.25rem" }}>
+            Plan a targeted session by role, test your voice &amp; video setup, and practice realistic questions.
+          </p>
+        </div>
+        <Link className="button-link primary" href="/interview" style={{ padding: "0.75rem 1.5rem", whiteSpace: "nowrap" }}>
+          Go to Practice Interviews →
+        </Link>
+      </section>
+
+      {/* Profile Details Card */}
       <section className="card" aria-labelledby="profile-heading">
-        <h2 id="profile-heading">Your profile</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+          <div>
+            <h2 id="profile-heading" style={{ fontSize: "1.2rem" }}>Profile Information</h2>
+            <p className="hint">Your basic candidate account details</p>
+          </div>
+          {!editing && (
+            <button type="button" onClick={startEdit} disabled={busy} style={{ fontSize: "0.85rem", padding: "0.4rem 0.8rem" }}>
+              Edit Profile
+            </button>
+          )}
+        </div>
 
         {!editing && (
           <>
-            <dl>
-              <dt>Name</dt>
-              <dd>{candidate.name}</dd>
-              <dt>Email</dt>
-              <dd>{candidate.email}</dd>
-              <dt>Created</dt>
-              <dd>{new Date(candidate.created_at).toLocaleDateString()}</dd>
-            </dl>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(14rem, 1fr))", gap: "1rem", padding: "0.75rem 0" }}>
+              <div>
+                <span className="hint" style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</span>
+                <p style={{ fontWeight: 600, fontSize: "1.05rem" }}>{candidate.name}</p>
+              </div>
+              <div>
+                <span className="hint" style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Email</span>
+                <p style={{ fontWeight: 600, fontSize: "1.05rem" }}>{candidate.email}</p>
+              </div>
+              <div>
+                <span className="hint" style={{ fontSize: "0.75rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Member Since</span>
+                <p style={{ fontWeight: 600, fontSize: "1.05rem" }}>{new Date(candidate.created_at).toLocaleDateString()}</p>
+              </div>
+            </div>
             {errorBox}
-            <div className="actions">
-              <button type="button" onClick={startEdit} disabled={busy}>
-                Edit
-              </button>
-              <button type="button" className="danger" onClick={remove} disabled={busy}>
-                {busy ? "Deleting…" : "Delete profile"}
+            <div style={{ marginTop: "1rem", paddingTop: "0.75rem", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" className="danger" onClick={remove} disabled={busy} style={{ fontSize: "0.8rem", padding: "0.35rem 0.75rem" }}>
+                {busy ? "Deleting…" : "Delete account"}
               </button>
             </div>
           </>
         )}
 
         {editing && (
-          <form onSubmit={submit}>
+          <form onSubmit={submit} style={{ marginTop: "0.5rem" }}>
             {(["name", "email"] as const).map((field) => (
               <div className="field" key={field}>
-                <label htmlFor={field}>{field === "name" ? "Name" : "Email"}</label>
+                <label htmlFor={field}>{field === "name" ? "Full Name" : "Email Address"}</label>
                 <input
                   id={field}
                   name={field}
@@ -154,7 +184,7 @@ function Profile({ candidate }: { candidate: Candidate }) {
             ))}
             {errorBox}
             <div className="actions">
-              <button type="submit" disabled={busy}>
+              <button type="submit" className="primary" disabled={busy}>
                 {busy ? "Saving…" : "Save changes"}
               </button>
               <button type="button" onClick={() => setEditing(false)} disabled={busy}>
@@ -164,18 +194,12 @@ function Profile({ candidate }: { candidate: Candidate }) {
           </form>
         )}
       </section>
+
+      {/* Manual Skills & Projects Section */}
       <ManualFactsSection key={`manual-${candidate.id}`} candidateId={candidate.id} />
+
+      {/* Resume Upload & Review Section */}
       <ResumeSection key={candidate.id} candidateId={candidate.id} />
-      <section className="card" aria-labelledby="interview-heading">
-        <h2 id="interview-heading">Practice interviews</h2>
-        <p className="hint">
-          When your details above are ready (added by you, or approved from your resume), plan and
-          take a text interview, then see your feedback and your past interviews.
-        </p>
-        <Link className="button-link" href="/interview">
-          Go to your interviews
-        </Link>
-      </section>
-    </>
+    </div>
   );
 }

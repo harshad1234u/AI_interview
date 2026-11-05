@@ -25,6 +25,7 @@ from app.schemas.report import (
     AnswerCounts,
     AnswerEvidence,
     AnswerObservation,
+    AvailableSpeechMetrics,
     CommunicationObservations,
     CompetencyCoverage,
     Coverage,
@@ -37,6 +38,7 @@ from app.schemas.report import (
     ReportQuestion,
     ReportSummary,
     RetryAvailability,
+    SpeechMetrics,
     TopicCoverage,
     TopicToPractise,
     ToPractise,
@@ -80,6 +82,7 @@ ANSWER_NOTE = {
 NOT_ASKED = "Not asked in this interview."
 CONCEPT_PRACTICE = "Practise explaining {concept} with an example."
 CRITERION_PRACTICE = {
+    Criterion.TECHNICAL_ACCURACY: "Practise explaining technical concepts, algorithms and trade-offs accurately.",
     Criterion.RELEVANCE: "Practise answering the question that was asked before adding detail.",
     Criterion.COMPLETENESS: "Practise covering each part of the question.",
     Criterion.REASONING: "Practise explaining why, not only what.",
@@ -94,7 +97,8 @@ CRITERION_PRACTICE = {
 SCORE_MEANING = {1: "not shown", 2: "slightly", 3: "partly", 4: "mostly", 5: "clearly and fully"}
 SCORE_SCALE = {**{str(k): v for k, v in SCORE_MEANING.items()}, "null": "too little to judge"}
 SHOWN_CLEARLY, TO_PRACTISE = (4, 5), (1, 2)  # 3 and null are in neither list (R1)
-SPEECH_METRICS = Unavailable(note="Speech metrics are not available: answers were given as text.")
+SPEECH_METRICS_UNAVAILABLE = Unavailable(note="Speech metrics are not available: answers were given as text.")
+SPEECH_METRICS = SPEECH_METRICS_UNAVAILABLE
 # Phase 10: true exactly when there is a topic to practise. Whether its facts are still valid is
 # checked when the retry is requested, not here.
 RETRY = RetryAvailability(available=True, note="You can retry the topics to practise in a new "
@@ -112,6 +116,26 @@ class ReportNotAllowed(Exception):
 
 
 # ---------- pure ----------
+
+
+def _speech_metrics(questions: Sequence[InterviewQuestion]) -> SpeechMetrics:
+    speech_answers = [q for q in questions if q.speech_duration_ms is not None and q.speech_duration_ms > 0]
+    if not speech_answers:
+        return SPEECH_METRICS_UNAVAILABLE
+    total_ms = sum(q.speech_duration_ms for q in speech_answers if q.speech_duration_ms)
+    total_secs = round(total_ms / 1000)
+    wpms = [q.speech_wpm for q in speech_answers if q.speech_wpm is not None and q.speech_wpm > 0]
+    avg_wpm = round(sum(wpms) / len(wpms)) if wpms else None
+    wpm_text = f"about {avg_wpm} words per minute" if avg_wpm else "cadence measured"
+    note = (f"Measured while speaking across {len(speech_answers)} answer(s): "
+            f"{total_secs} seconds total speaking time, {wpm_text}.")
+    return AvailableSpeechMetrics(
+        available=True,
+        note=note,
+        total_spoken_seconds=total_secs,
+        average_wpm=avg_wpm,
+        spoken_answers_count=len(speech_answers),
+    )
 
 
 def build_report(session: InterviewSession, plan: InterviewPlan,
@@ -132,28 +156,13 @@ def build_report(session: InterviewSession, plan: InterviewPlan,
             evaluated=statuses.count(ES.EVALUATED),
             observations_only=statuses.count(ES.OBSERVATIONS_ONLY),
             not_applicable=statuses.count(ES.NOT_APPLICABLE),
-            not_evaluated=statuses.count(ES.NOT_EVALUATED)))
-
-    # Only an ANSWER has an evaluation that counts; other kinds are never penalized (R5).
-    rows = [(q, evaluations[q.id]) for q in answered
-            if q.answer_kind == K.ANSWER and q.id in evaluations]
-    shown, low, missing = [], [], []
-    for q, row in rows:
-        if row.source != QuestionSource.AI:  # observations only: no scores, nothing derived (R4)
-            continue
-        order = RUBRICS[row.rubric]
-        for c in sorted(row.criteria, key=lambda c: order.index(c.criterion)):
-            item = dict(question_id=q.id, seq=q.seq, topic_position=q.topic_position,
-                        criterion=c.criterion, score=c.score, evidence=c.evidence)
-            if c.score in SHOWN_CLEARLY:
-                shown.append(CriterionItem(**item, score_meaning=SCORE_MEANING[c.score]))
-            elif c.score in TO_PRACTISE:
-                low.append(PractiseCriterion(**item, score_meaning=SCORE_MEANING[c.score],
-                                             practice=CRITERION_PRACTICE[c.criterion]))
-        missing += [MissingConcept(question_id=q.id, seq=q.seq, topic_position=q.topic_position,
-                                   concept=concept, practice=CONCEPT_PRACTICE.format(concept=concept))
-                    for concept in row.missing_concepts]
-
+            not_evaluated=statuses.count(ES.NOT_EVALUATED)),
+    )
+    # Order: the interview's question order (§31 R1).
+    rows = [(q, evaluations[q.id]) for q in answered if q.id in evaluations]
+    ai_rows = [(q, row) for q, row in rows if row.source == QuestionSource.AI]
+    shown, low = _criteria(ai_rows)
+    missing = _missing(ai_rows)
     topics_to_practise = _topics_to_practise(plan, low, missing)
     return InterviewReport(
         summary=summary,
@@ -174,7 +183,7 @@ def build_report(session: InterviewSession, plan: InterviewPlan,
             answers=[AnswerObservation(question_id=q.id, seq=q.seq, word_count=row.word_count,
                                        concepts_mentioned=row.concepts_mentioned)
                      for q, row in rows],
-            speech_metrics=SPEECH_METRICS),
+            speech_metrics=_speech_metrics(questions)),
         topics_to_practise=topics_to_practise,
         recommended_practice=_practice(low, missing),
         retry=RETRY if topics_to_practise else NO_RETRY,
@@ -198,6 +207,31 @@ def _coverage(plan: InterviewPlan, questions: Sequence[InterviewQuestion]) -> Co
         competency=c, planned_topics=sum(t.competency == c for t in topics),
         asked_topics=sum(t.competency == c and t.questions_asked > 0 for t in topics))
         for c in competencies])
+
+
+def _criteria(rows: list[tuple[InterviewQuestion, AnswerEvaluation]]
+              ) -> tuple[list[CriterionItem], list[PractiseCriterion]]:
+    shown: list[CriterionItem] = []
+    low: list[PractiseCriterion] = []
+    for q, row in rows:
+        for c in row.criteria:
+            if c.score in SHOWN_CLEARLY:
+                shown.append(CriterionItem(
+                    question_id=q.id, seq=q.seq, topic_position=q.topic_position,
+                    criterion=c.criterion, score=c.score, score_meaning=SCORE_MEANING[c.score],
+                    evidence=c.evidence))
+            elif c.score in TO_PRACTISE:
+                low.append(PractiseCriterion(
+                    question_id=q.id, seq=q.seq, topic_position=q.topic_position,
+                    criterion=c.criterion, score=c.score, score_meaning=SCORE_MEANING[c.score],
+                    practice=CRITERION_PRACTICE[c.criterion], evidence=c.evidence))
+    return shown, low
+
+
+def _missing(rows: list[tuple[InterviewQuestion, AnswerEvaluation]]) -> list[MissingConcept]:
+    return [MissingConcept(question_id=q.id, seq=q.seq, topic_position=q.topic_position,
+                           concept=concept, practice=CONCEPT_PRACTICE.format(concept=concept))
+            for q, row in rows for concept in row.missing_concepts]
 
 
 def _topics_to_practise(plan: InterviewPlan, low: list[PractiseCriterion],

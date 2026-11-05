@@ -8,6 +8,7 @@ from sqlalchemy import (
     Double,
     ForeignKey,
     Index,
+    Integer,
     SmallInteger,
     String,
     Text,
@@ -88,6 +89,10 @@ class InterviewQuestion(Base):
             name="answer_fields_together",
         ),
         CheckConstraint("answer_text IS NULL OR answer_kind IS NOT NULL", name="answer_text_needs_kind"),
+        CheckConstraint("speech_duration_ms IS NULL OR speech_duration_ms >= 0",
+                        name="speech_duration_not_negative"),
+        CheckConstraint("speech_wpm IS NULL OR speech_wpm >= 0",
+                        name="speech_wpm_not_negative"),
     )
     __mapper_args__ = {"eager_defaults": True}
 
@@ -123,3 +128,5 @@ class InterviewQuestion(Base):
     evaluation_status: Mapped[EvaluationStatus | None] = mapped_column(
         checked_enum(EvaluationStatus, "evaluation_status")
     )
+    speech_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    speech_wpm: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)

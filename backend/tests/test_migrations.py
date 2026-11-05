@@ -39,13 +39,17 @@ def test_downgrade_upgrade_roundtrip_and_models_in_sync() -> None:
 def test_candidates_table_schema() -> None:
     insp = inspect(engine)
     cols = {c["name"]: c for c in insp.get_columns("candidates")}
-    # Credentials and the lockout counters arrived in Phase 12.
+    # Credentials and lockout in Phase 12; external Supabase auth_user_id in Phase 2 (e8f3b2c1a0d9).
     assert set(cols) == {"id", "email", "name", "created_at", "password_hash", "failed_logins",
-                         "locked_until"}
-    assert {n for n, c in cols.items() if c["nullable"]} == {"password_hash", "locked_until"}
+                         "locked_until", "auth_user_id"}
+    assert {n for n, c in cols.items() if c["nullable"]} == {"password_hash", "locked_until", "auth_user_id"}
     assert insp.get_pk_constraint("candidates")["constrained_columns"] == ["id"]
-    uniques = {u["name"]: u["column_names"] for u in insp.get_unique_constraints("candidates")}
-    assert uniques == {"uq_candidates_email": ["email"]}
+    indexes = {i["name"]: i for i in insp.get_indexes("candidates")}
+    assert "uq_candidates_auth_user_id" in indexes
+    assert indexes["uq_candidates_auth_user_id"]["unique"]
+    assert "uq_candidates_email_active" in indexes
+    assert indexes["uq_candidates_email_active"]["unique"]
+    assert "auth_user_id IS NOT NULL" in indexes["uq_candidates_email_active"]["dialect_options"]["postgresql_where"]
     checks = {c["name"] for c in insp.get_check_constraints("candidates")}
     assert checks == {"ck_candidates_email_lowercase", "ck_candidates_name_not_blank",
                       "ck_candidates_failed_logins_not_negative"}
@@ -127,10 +131,16 @@ def test_database_rejects_invalid_rows(
 
 
 def test_database_enforces_unique_email(db_session: Session) -> None:
-    db_session.execute(insert(Candidate).values(email="u@example.com", name="A"))
-    with pytest.raises(IntegrityError) as exc:
-        db_session.execute(insert(Candidate).values(email="u@example.com", name="B"))
-    assert exc.value.orig.diag.constraint_name == "uq_candidates_email"
+    # Phase 2 partial unique index uq_candidates_email_active applies when auth_user_id is not null
+    auth_id_1 = uuid.uuid4()
+    auth_id_2 = uuid.uuid4()
+    db_session.execute(insert(Candidate).values(email="u@example.com", name="A", auth_user_id=auth_id_1))
+    with pytest.raises(IntegrityError) as exc, db_session.begin_nested():
+        db_session.execute(insert(Candidate).values(email="u@example.com", name="B", auth_user_id=auth_id_2))
+    assert exc.value.orig.diag.constraint_name == "uq_candidates_email_active"
+    # Legacy unlinked records (auth_user_id is None) do not conflict under the partial index
+    db_session.execute(insert(Candidate).values(email="legacy@example.com", name="Legacy 1"))
+    db_session.execute(insert(Candidate).values(email="legacy@example.com", name="Legacy 2"))
 
 
 # ---------- resumes / candidate_facts ----------
@@ -283,7 +293,9 @@ def test_deleting_candidate_cascades_in_the_database(db_session: Session) -> Non
 
 PLAN_REVISION, BEFORE_PLAN_REVISION = "b8d14f2a9c63", "e5813b741341"
 HEAD = ScriptDirectory.from_config(Config(str(ALEMBIC_INI))).get_current_head()
-LATEST_REVISION = "c5d1a7e3b920"  # the newest revision: every round trip must end here
+SUPABASE_AUTH_REVISION = "e8f3b2c1a0d9"
+CAS_FENCING_REVISION = "f9a1b2c3d4e5"
+LATEST_REVISION = HEAD  # the newest revision: every round trip must end here
 CALL_COLUMNS = ("INSERT INTO provider_calls (request_id, capability, requested_provider, "
                 "succeeded, attempts, fallback_used, latency_ms) ")
 
@@ -408,7 +420,7 @@ QUESTION_CHECKS = {f"ck_interview_questions_{n}" for n in (
     "follow_up_has_followup_index", "rephrase_index_range", "rephrase_index_matches_kind",
     "text_not_blank", "rules_reason_matches_source", "anchor_only_on_ai_follow_ups",
     "clock_at_ask_not_negative", "answer_text_length", "answer_fields_together",
-    "answer_text_needs_kind")}
+    "answer_text_needs_kind", "speech_duration_not_negative", "speech_wpm_not_negative")}
 
 
 def test_interviewer_tables_schema() -> None:
@@ -416,7 +428,7 @@ def test_interviewer_tables_schema() -> None:
     assert {c["name"] for c in insp.get_columns("interview_questions")} == {
         "id", "session_id", "seq", "topic_position", "kind", "followup_index", "rephrase_index",
         "text", "source", "rules_reason", "anchor", "provider_call_id", "asked_at", "clock_at_ask",
-        "answer_kind", "answer_text", "answered_at", "evaluation_status"}
+        "answer_kind", "answer_text", "answered_at", "evaluation_status", "speech_duration_ms", "speech_wpm"}
     assert {c["name"] for c in insp.get_check_constraints("interview_questions")} == QUESTION_CHECKS
     fks = {fk["referred_table"]: (fk["constrained_columns"], fk["options"].get("ondelete"))
            for fk in insp.get_foreign_keys("interview_questions")}
@@ -772,7 +784,7 @@ def test_database_rejects_invalid_evaluations(db_session: Session, bad: dict,
 
 
 @pytest.mark.parametrize(("criterion", "score", "evidence", "constraint"), [
-    ("technical_accuracy", 4, '["B-trees."]', "ck_answer_evaluation_criteria_criterion"),
+    ("unknown_criterion", 4, '["B-trees."]', "ck_answer_evaluation_criteria_criterion"),
     ("overall", 4, '["B-trees."]', "ck_answer_evaluation_criteria_criterion"),
     ("relevance", 0, '["B-trees."]', "ck_answer_evaluation_criteria_score_range"),
     ("relevance", 6, '["B-trees."]', "ck_answer_evaluation_criteria_score_range"),
@@ -899,14 +911,23 @@ TOKEN = "a" * 64  # stands in for a SHA-256 hex digest
 def test_auth_schema() -> None:
     insp = inspect(engine)
     cols = {c["name"]: c for c in insp.get_columns("auth_sessions")}
-    assert set(cols) == {"token_hash", "candidate_id", "created_at", "expires_at"}
-    assert not any(c["nullable"] for c in cols.values())
+    expected_cols = {
+        "token_hash", "candidate_id", "auth_user_id", "encrypted_refresh_token",
+        "access_token_expires_at", "created_at", "last_used_at", "expires_at",
+        "absolute_expires_at", "refresh_locked_at", "refresh_lock_id", "revoked_at"
+    }
+    assert set(cols) == expected_cols
+    nullable = {n for n, c in cols.items() if c["nullable"]}
+    assert nullable == {"auth_user_id", "encrypted_refresh_token", "access_token_expires_at",
+                        "refresh_locked_at", "refresh_lock_id", "revoked_at"}
     assert insp.get_pk_constraint("auth_sessions")["constrained_columns"] == ["token_hash"]
     fks = [(fk["constrained_columns"], fk["referred_table"], fk["options"].get("ondelete"))
            for fk in insp.get_foreign_keys("auth_sessions")]
     assert fks == [(["candidate_id"], "candidates", "CASCADE")]
-    assert {i["name"]: i["column_names"] for i in insp.get_indexes("auth_sessions")} == {
-        "ix_auth_sessions_candidate_id": ["candidate_id"]}
+    indexes = {i["name"]: i["column_names"] for i in insp.get_indexes("auth_sessions")}
+    assert indexes["ix_auth_sessions_candidate_id"] == ["candidate_id"]
+    assert indexes["ix_auth_sessions_auth_user_id"] == ["auth_user_id"]
+    assert indexes["ix_auth_sessions_absolute_expires_at"] == ["absolute_expires_at"]
     assert {c["name"] for c in insp.get_check_constraints("auth_sessions")} == {
         "ck_auth_sessions_expires_after_created"}
     # No column could hold a raw token or a plaintext password.
@@ -998,10 +1019,12 @@ def test_auth_revision_downgrades_and_re_upgrades_keeping_candidates() -> None:
                 "SELECT email, name, password_hash, failed_logins FROM candidates WHERE id = :c"),
                 {"c": cid}).one()) == ("kept@example.com", "Kept", None, 0)
             assert conn.scalar(text("SELECT count(*) FROM auth_sessions")) == 0
+            # Set auth_user_id to test active email uniqueness under uq_candidates_email_active
+            conn.execute(text("UPDATE candidates SET auth_user_id = gen_random_uuid() WHERE id = :c"), {"c": cid})
             with pytest.raises(IntegrityError) as exc:  # unique email still enforced
-                conn.execute(text("INSERT INTO candidates (email, name) "
-                                  "VALUES ('kept@example.com', 'Dup')"))
-            assert exc.value.orig.diag.constraint_name == "uq_candidates_email"
+                conn.execute(text("INSERT INTO candidates (email, name, auth_user_id) "
+                                  "VALUES ('kept@example.com', 'Dup', gen_random_uuid())"))
+            assert exc.value.orig.diag.constraint_name == "uq_candidates_email_active"
     finally:
         command.upgrade(cfg, "head")
         with engine.begin() as conn:
@@ -1316,3 +1339,28 @@ def test_expression_revision_downgrades_and_re_upgrades_cleanly() -> None:
         assert _current_heads() == {HEAD} == {LATEST_REVISION}
     finally:
         command.upgrade(cfg, "head")
+
+
+def test_supabase_auth_and_cas_fencing_migrations_verify_schema() -> None:
+    """Explicitly verifies Phase 2 (e8f3b2c1a0d9) and Phase 3 (f9a1b2c3d4e5) schema invariants."""
+    insp = inspect(engine)
+    candidates_cols = {c["name"]: c for c in insp.get_columns("candidates")}
+    assert "auth_user_id" in candidates_cols
+    assert candidates_cols["auth_user_id"]["nullable"] is True
+
+    candidate_indexes = {i["name"]: i for i in insp.get_indexes("candidates")}
+    assert "uq_candidates_email_active" in candidate_indexes
+    assert candidate_indexes["uq_candidates_email_active"]["unique"] is True
+    assert "uq_candidates_auth_user_id" in candidate_indexes
+    assert candidate_indexes["uq_candidates_auth_user_id"]["unique"] is True
+
+    auth_cols = {c["name"]: c for c in insp.get_columns("auth_sessions")}
+    assert "refresh_lock_id" in auth_cols
+    assert "refresh_locked_at" in auth_cols
+    assert "encrypted_refresh_token" in auth_cols
+    assert "revoked_at" in auth_cols
+    assert "absolute_expires_at" in auth_cols
+
+    auth_indexes = {i["name"]: i for i in insp.get_indexes("auth_sessions")}
+    assert "ix_auth_sessions_auth_user_id" in auth_indexes
+    assert "ix_auth_sessions_absolute_expires_at" in auth_indexes

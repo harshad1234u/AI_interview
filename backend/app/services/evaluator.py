@@ -1,17 +1,13 @@
-"""Answer evaluator (Phase 8, docs/phase-8-evaluator-plan.md): rubrics, deterministic
-observations, validation of model evaluations, and persistence.
+"""Answer evaluation: the code side of Phase 8.
 
-Evaluation happens only after the interview finished, one stored answer per request, and never
-feeds back into the interview: nothing in services/interviewer.py reads it (plan C-E1, C-E2).
-Code decides the rubric, the eligibility, the status and whether a model may be asked; a model only
-proposes rubric content, which is validated here before anything is stored.
-
-Transaction contract (as in the planner and interviewer): prepare_evaluation() locks the session,
-decides, and either completes the evaluation itself or commits and hands back a
-PendingEvaluation; no connection or lock is held while a model runs. save_evaluation() locks
-again, re-checks, and writes. Callers commit.
-
-Untrusted text: the answer, the plan, facts and every model output. None of it is logged.
+Transaction contract (same pattern as the interviewer):
+T1: prepare_evaluation checks eligibility, status and AI consent under the session row lock. If no
+    model is needed, it stores the observations-only evaluation and commits. If a model is
+    permitted, it commits (so no DB lock or connection is held while waiting for a model) and
+    returns a PendingEvaluation.
+T2: save_evaluation re-acquires the session row lock, re-checks that the evaluation has not been
+    stored concurrently, stores the evaluation and the call records together, flushes, and the
+    caller commits.
 """
 
 import logging
@@ -58,7 +54,7 @@ C = Criterion
 
 RUBRIC_VERSION = 1
 RUBRICS = {
-    Rubric.TECHNICAL_PROJECT: (C.RELEVANCE, C.COMPLETENESS, C.REASONING, C.COMMUNICATION),
+    Rubric.TECHNICAL_PROJECT: (C.TECHNICAL_ACCURACY, C.RELEVANCE, C.COMPLETENESS, C.REASONING, C.COMMUNICATION),
     Rubric.BEHAVIORAL_HR: (C.RELEVANCE, C.STRUCTURE, C.SPECIFICITY, C.EVIDENCE, C.REFLECTION,
                            C.OUTCOME),  # PRD §41
 }
