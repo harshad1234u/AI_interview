@@ -67,6 +67,21 @@ class BodySizeLimit:
         await self.app(scope, limited_receive, send)
 
 
+class DuplicateSlashNormalizer:
+    """Collapses consecutive slashes in request paths (e.g. '//api/health' -> '/api/health')
+    to prevent unintended 404s caused by reverse-proxy rewrites or client URL concatenation."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            raw_path = scope.get("path", "")
+            if "//" in raw_path:
+                scope["path"] = re.sub(r"/+", "/", raw_path)
+        await self.app(scope, receive, send)
+
+
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
@@ -283,6 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         upload_max_bytes=settings.max_resume_bytes + MULTIPART_OVERHEAD_BYTES,
         upload_detail=resumes.too_large_detail(settings),
     )
+    app.add_middleware(DuplicateSlashNormalizer)
     app.add_exception_handler(OperationalError, database_unavailable)
     app.add_exception_handler(RequestValidationError, validation_error)
     app.include_router(health.router, prefix="/api")

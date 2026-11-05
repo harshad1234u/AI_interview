@@ -23,6 +23,11 @@ def test_production_environment_registers_all_functional_routers() -> None:
     res_auth = client.post("/api/auth/login", json={}, headers={"Origin": "http://localhost:3000"})
     assert res_auth.status_code != 404
 
+    # 2b. /api/auth/me returns 401 for unauthenticated request (NOT 404)
+    res_me = client.get("/api/auth/me", headers={"Origin": "http://localhost:3000"})
+    assert res_me.status_code == 401
+    assert res_me.json() == {"detail": "Please log in."}
+
     # 3. Candidates routes are registered (protected -> 401, not 404)
     res_candidate = client.get("/api/candidates/me", headers={"Origin": "http://localhost:3000"})
     assert res_candidate.status_code == 401
@@ -51,6 +56,14 @@ def test_production_environment_registers_all_functional_routers() -> None:
     assert res_docs.status_code == 404
     res_openapi = client.get("/openapi.json")
     assert res_openapi.status_code == 404
+
+    # 8. Duplicate slashes are normalized seamlessly by DuplicateSlashNormalizer
+    res_slash_health = client.get("http://testserver//api/health")
+    assert res_slash_health.status_code in (200, 503)
+    res_slash_me = client.get("http://testserver//api/auth/me", headers={"Origin": "http://localhost:3000"})
+    assert res_slash_me.status_code == 401
+    res_multi_slash = client.get("http://testserver/api///candidates//me", headers={"Origin": "http://localhost:3000"})
+    assert res_multi_slash.status_code == 401
 
 
 def test_development_environment_enables_docs() -> None:

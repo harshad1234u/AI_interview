@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthProvider";
-import { ApiError, forgotPassword, login, register } from "@/lib/api";
+import { ApiError, forgotPassword, getApiEndpoint, login, register } from "@/lib/api";
 import {
   type AuthFieldErrors,
   type AuthForm,
@@ -66,9 +66,7 @@ export default function LoginForm() {
   }
 
   async function handleGoogleLogin() {
-    const apiUrl = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/+$/, "");
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
-    window.location.href = `${apiUrl}/api/auth/google/start`;
+    window.location.href = getApiEndpoint("/api/auth/google/start");
   }
 
   async function submit(e: FormEvent) {

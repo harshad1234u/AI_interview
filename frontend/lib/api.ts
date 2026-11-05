@@ -1,7 +1,8 @@
 import { LOGIN_PATH, shouldRedirectToLogin } from "@/lib/auth";
+import { getApiEndpoint } from "@/lib/endpoint";
 import type { Observation } from "@/lib/expressions";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL?.replace(/\/+$/, "");
+export { getApiEndpoint };
 
 export type Health = {
   status: "ok" | "degraded";
@@ -68,12 +69,17 @@ export type FactReview = { fact?: string; status?: "APPROVED" | "REJECTED" };
 
 /** status 0 = the request never got a response (network down, backend off, misconfigured). */
 export class ApiError extends Error {
+  status: number;
+  fieldErrors: Partial<Record<string, string>>;
+
   constructor(
-    public status: number,
+    status: number,
     message: string,
-    public fieldErrors: Partial<Record<string, string>> = {},
+    fieldErrors: Partial<Record<string, string>> = {},
   ) {
     super(message);
+    this.status = status;
+    this.fieldErrors = fieldErrors;
   }
 }
 
@@ -98,10 +104,12 @@ function toApiError(status: number, body: unknown): ApiError {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (!API_URL) throw new ApiError(0, "App is misconfigured: NEXT_PUBLIC_API_URL is not set.");
+  const base = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (!base) throw new ApiError(0, "App is misconfigured: NEXT_PUBLIC_API_URL is not set.");
   let res: Response;
+  const endpoint = getApiEndpoint(path);
   try {
-    res = await fetch(`${API_URL}${path}`, {
+    res = await fetch(endpoint, {
       ...init,
       // FormData bodies must let the browser set the multipart Content-Type (with its boundary).
       headers:
@@ -127,8 +135,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function getHealth(signal?: AbortSignal): Promise<Health> {
-  if (!API_URL) throw new Error("NEXT_PUBLIC_API_URL is not configured");
-  const res = await fetch(`${API_URL}/api/health`, { signal, cache: "no-store" });
+  const base = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (!base) throw new Error("NEXT_PUBLIC_API_URL is not configured");
+  const endpoint = getApiEndpoint("/api/health");
+  const res = await fetch(endpoint, { signal, cache: "no-store" });
   // 503 still carries a well-formed Health body (database unavailable).
   if (!res.ok && res.status !== 503) throw new Error(`Unexpected status ${res.status}`);
   return (await res.json()) as Health;
