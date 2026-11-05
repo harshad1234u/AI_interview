@@ -49,6 +49,8 @@ BEHAV = ("In a college project I split the tasks, we met daily and we shipped on
          "to ask for help early.")
 TECH_EVAL = {
     "criteria": [
+        {"criterion": "technical_accuracy", "score": 4,
+         "evidence": ["A recursive function calls itself on a smaller input."]},
         {"criterion": "relevance", "score": 4,
          "evidence": ["A recursive function calls itself on a smaller input."]},
         {"criterion": "completeness", "score": 3,
@@ -148,7 +150,7 @@ def test_ai_evaluation_is_validated_stored_and_returned(
     assert (e["rubric"], e["rubric_version"], e["source"], e["rules_reason"]) == (
         "TECHNICAL_PROJECT", 1, "AI", None)
     assert [(c["criterion"], c["score"]) for c in e["criteria"]] == [
-        ("relevance", 4), ("completeness", 3), ("reasoning", 3), ("communication", None)]
+        ("technical_accuracy", 4), ("relevance", 4), ("completeness", 3), ("reasoning", 3), ("communication", None)]
     assert all(quote in TECH for c in e["criteria"] for quote in c["evidence"])
     assert e["missing_concepts"] == ["reasoning"]  # in the plan's own spelling
     assert e["claims_to_verify"] == [{"quote": "the trade-offs are stack depth versus clarity",
@@ -159,7 +161,7 @@ def test_ai_evaluation_is_validated_stored_and_returned(
         "concepts_mentioned": ["implementation", "trade-offs"]}
     assert set(body) == {"session_id", "question_id", "status", "evaluation", "notice",
                          "model_calls"}
-    for absent in ("overall", "total", "technical_accuracy", "recommended", "percent", "rank"):
+    for absent in ("overall", "total", "recommended", "percent", "rank"):
         assert absent not in json.dumps(e)  # no combined, correctness or next-question field
     # The interview and the answer are untouched (C-E1, C-E2, E7).
     assert session_row(db_session, started) == before
@@ -257,7 +259,7 @@ BAD_QUOTE = {**TECH_EVAL, "criteria": [{**TECH_EVAL["criteria"][0],
     (("{not json",), "PROVIDERS_FAILED"),  # invalid JSON
     (({**TECH_EVAL, "criteria": [{"criterion": "relevance", "score": 7, "evidence": ["x"]}]},),
      "PROVIDERS_FAILED"),  # score out of range: the schema refuses it
-    (({**TECH_EVAL, "criteria": [{"criterion": "technical_accuracy", "score": 2,
+    (({**TECH_EVAL, "criteria": [{"criterion": "unknown_criterion", "score": 2,
                                   "evidence": ["x"]}]},), "PROVIDERS_FAILED"),  # unknown criterion
     (({**TECH_EVAL, "recommended_followup": "Ask about loops"},), "PROVIDERS_FAILED"),
     ((BAD_QUOTE,), "OUTPUT_REJECTED"),  # evidence not in the answer (case changed)
@@ -485,13 +487,14 @@ def test_logs_and_call_records_hold_no_content(
 
 
 def test_evaluation_routes_not_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = TestClient(create_app(Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x",
                                           environment="production")),
                       headers={"Origin": "http://localhost:3000"})
     s, q = uuid.uuid4(), uuid.uuid4()
     assert prod.post(f"/api/interview-sessions/{s}/questions/{q}/evaluation",
-                     json={}).status_code == 404
-    assert prod.get(f"/api/interview-sessions/{s}/evaluations").status_code == 404
+                     json={}).status_code == 401
+    assert prod.get(f"/api/interview-sessions/{s}/evaluations").status_code == 401
 
 
 def test_database_unavailable_is_503(dead_database_client: TestClient) -> None:
@@ -538,6 +541,6 @@ def test_concurrent_requests_store_one_evaluation(committed_interview: uuid.UUID
         assert db.scalar(text("SELECT count(*) FROM answer_evaluations WHERE question_id = :q"),
                          {"q": q["id"]}) == 1
         assert db.scalar(text("SELECT count(*) FROM answer_evaluation_criteria "
-                              "WHERE question_id = :q"), {"q": q["id"]}) == 4
+                              "WHERE question_id = :q"), {"q": q["id"]}) == 5
         assert db.scalar(text("SELECT count(*) FROM provider_calls "
                               "WHERE model = 'gated-interviewer'")) == 2  # both recorded

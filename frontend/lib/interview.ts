@@ -183,6 +183,7 @@ export const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
 };
 
 export const CRITERION_LABEL: Record<Criterion, string> = {
+  technical_accuracy: "Technical Accuracy",
   relevance: "Relevance",
   completeness: "Completeness",
   reasoning: "Reasoning",

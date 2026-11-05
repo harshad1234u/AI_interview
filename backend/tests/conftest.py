@@ -33,11 +33,23 @@ from sqlalchemy.orm import Session  # noqa: E402
 from app.db.session import engine, get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from tests.auth_helpers import api_client  # noqa: E402
+from app.api.routes.auth import get_supabase_service  # noqa: E402
+from tests.fake_supabase import FakeSupabaseAuthService  # noqa: E402
 
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
 @pytest.fixture(scope="session", autouse=True)
 def migrated_database() -> None:
     command.upgrade(Config(str(ALEMBIC_INI)), "head")
+
+
+@pytest.fixture(autouse=True)
+def fake_supabase() -> Iterator[FakeSupabaseAuthService]:
+    fake = FakeSupabaseAuthService()
+    app.dependency_overrides[get_supabase_service] = lambda: fake
+    try:
+        yield fake
+    finally:
+        app.dependency_overrides.pop(get_supabase_service, None)
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +60,8 @@ def fresh_usage_limits() -> Iterator[None]:
     with engine.begin() as conn:
         if conn.scalar(text("SELECT to_regclass('usage_counters')")) is not None:
             conn.execute(text("DELETE FROM usage_counters"))
+        if conn.scalar(text("SELECT to_regclass('provider_calls')")) is not None:
+            conn.execute(text("DELETE FROM provider_calls"))
 
 
 @pytest.fixture

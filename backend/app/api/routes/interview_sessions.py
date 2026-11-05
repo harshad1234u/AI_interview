@@ -1,3 +1,4 @@
+import asyncio
 """HTTP layer for interview sessions. Lifecycle decisions live in services/interview_state_machine."""
 
 import logging
@@ -21,7 +22,7 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db
 from app.models import AnswerEvaluation, Candidate, InterviewQuestion, InterviewSession
 from app.models.interview_question import ANSWER_MAX_LENGTH, AnswerKind
-from app.models.interview_session import InterviewStatus
+from app.models.interview_session import FinishReason, InterviewStatus
 from app.schemas.interview_plan import (
     InterviewPlan,
     InterviewPlanResult,
@@ -32,6 +33,7 @@ from app.schemas.interview_plan import (
 )
 from app.schemas.evaluation import (
     AnswerEvaluationItem,
+    BatchEvaluationResult,
     EvaluationList,
     EvaluationRequest,
     EvaluationResult,
@@ -182,11 +184,43 @@ def create_interview_session(
     candidate: Candidate = Depends(current_candidate),
     db: Session = Depends(get_db),
 ) -> InterviewSession:
+    if body.abandon_active:
+        active_sessions = list(db.scalars(
+            select(InterviewSession).where(
+                InterviewSession.candidate_id == candidate.id,
+                InterviewSession.status != InterviewStatus.COMPLETED,
+            )
+        ))
+        for s in active_sessions:
+            s.status = InterviewStatus.COMPLETED
+            s.finish_reason = FinishReason.CANDIDATE_ENDED
+        if active_sessions:
+            db.flush()
     try:
         session = create_session(db, candidate.id)
     except ActiveSessionExists as exc:
         db.rollback()
         raise _active_session_conflict(exc) from None
+    _commit(db)
+    return session
+
+
+@router.post(
+    "/interview-sessions/{session_id}/abandon",
+    response_model=InterviewSessionResponse,
+)
+def abandon_interview_session(
+    session_id: OwnedSessionId,
+    db: Session = Depends(get_db),
+) -> InterviewSession:
+    """Explicitly abandon an active session, marking it COMPLETED with CANDIDATE_ENDED (AUDIT-008)."""
+    session = db.get(InterviewSession, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+    if session.status != InterviewStatus.COMPLETED:
+        session.status = InterviewStatus.COMPLETED
+        session.finish_reason = FinishReason.CANDIDATE_ENDED
+        db.flush()
     _commit(db)
     return session
 
@@ -371,7 +405,8 @@ def _question_view(plan: InterviewPlan, q: InterviewQuestion,
         competency=topic.competency, question_type=topic.question_type,
         difficulty=topic.difficulty, basis=topic.basis, kind=q.kind,
         followup_index=q.followup_index, rephrase_index=q.rephrase_index, text=q.text,
-        source=q.source, rules_reason=q.rules_reason, asked_at=q.asked_at, answer=answer)
+        source=q.source, rules_reason=q.rules_reason, asked_at=q.asked_at, answer=answer,
+        speech_duration_ms=q.speech_duration_ms, speech_wpm=q.speech_wpm)
 
 
 def _progress(plan: InterviewPlan, elapsed: float) -> Progress:
@@ -439,7 +474,15 @@ def answer_question(
     if body.kind == AnswerKind.ANSWER and not text:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "An answer needs text.")
     try:
-        session, question = submit_answer(db, session_id, body.question_id, body.kind, text)
+        session, question = submit_answer(
+            db,
+            session_id,
+            body.question_id,
+            body.kind,
+            text,
+            speech_duration_ms=body.speech_duration_ms,
+            speech_wpm=body.speech_wpm,
+        )
     except (SessionNotFound, QuestionNotFound) as exc:
         db.rollback()
         detail = NOT_FOUND if isinstance(exc, SessionNotFound) else "Question not found"
@@ -516,6 +559,103 @@ def evaluate_answer(
         evaluation=evaluation_view(result.plan, result.question, row),
         notice=notice_for(row.rules_reason) if row else None,
         model_calls=_call_summaries(result.records))
+
+
+@router.post(
+    "/interview-sessions/{session_id}/evaluations/batch",
+    response_model=BatchEvaluationResult,
+)
+def batch_evaluate_answers(
+    session_id: OwnedSessionId,
+    db: Session = Depends(get_db),
+    gateway: ModelGateway | None = Depends(get_model_gateway),
+    candidate: Candidate = Depends(current_candidate),
+    settings: Settings = Depends(get_settings),
+) -> BatchEvaluationResult:
+    """Evaluate all answered questions in this session with server-side concurrency (AUDIT-003, AUDIT-010)."""
+    session = db.get(InterviewSession, session_id)
+    if session is None or session.candidate_id != candidate.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+    if session.status not in (InterviewStatus.REPORT_GENERATION, InterviewStatus.COMPLETED):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Answers can be evaluated only after the interview has finished.")
+
+    questions = [q for q in load_history(db, session_id) if q.answered_at is not None]
+    if not questions:
+        return BatchEvaluationResult(session_id=session_id, total_evaluated=0, evaluations=[], notices=[])
+
+    # Step 1: Prepare evaluation for each question
+    prepared_list = []
+    for q in questions:
+        try:
+            res = prepare_evaluation(db, session_id, q.id, model_available=gateway is not None)
+            prepared_list.append(res)
+        except EvaluationNotAllowed as exc:
+            logger.warning("Evaluation skipped for question %s: %s", q.id, exc)
+
+    # Step 2: For any PendingEvaluation, run model proposals concurrently
+    pendings = [p for p in prepared_list if isinstance(p, PendingEvaluation)]
+    model_outcomes: dict[uuid.UUID, ProposalOutcome] = {}
+
+    if pendings and gateway is not None:
+        to_call = []
+        for p in pendings:
+            if admit_ai(db, AI_EVALUATION, candidate.id, settings):
+                to_call.append(p)
+            else:
+                model_outcomes[p.question_id] = ProposalOutcome(rules_reason=RulesReason.QUOTA_REACHED)
+
+        if to_call:
+            async def _propose_all():
+                async def _call_one(p: PendingEvaluation):
+                    try:
+                        return p.question_id, await propose_evaluation(gateway, p.context, p.codes, p.deadline)
+                    except Exception as err:
+                        logger.error("AI evaluation call failed for question %s: %s", p.question_id, err)
+                        return p.question_id, ProposalOutcome(rules_reason=RulesReason.PROVIDERS_FAILED)
+                return await asyncio.gather(*[_call_one(p) for p in to_call])
+
+            results = anyio.from_thread.run(_propose_all)
+            for qid, outcome in results:
+                model_outcomes[qid] = outcome
+
+    # Step 3: Save evaluations and construct results
+    evaluation_results = []
+    notices = []
+    for p in prepared_list:
+        if isinstance(p, PendingEvaluation):
+            outcome = model_outcomes.get(p.question_id, ProposalOutcome(rules_reason=RulesReason.PROVIDERS_FAILED))
+            saved = save_evaluation(db, p, outcome)
+            _commit(db)
+            row = saved.evaluation
+            notice = notice_for(row.rules_reason) if row else None
+            if notice:
+                notices.append(notice)
+            evaluation_results.append(EvaluationResult(
+                session_id=saved.session.id, question_id=saved.question.id,
+                status=saved.question.evaluation_status,
+                evaluation=evaluation_view(saved.plan, saved.question, row),
+                notice=notice,
+                model_calls=_call_summaries(saved.records),
+            ))
+        else:
+            row = p.evaluation
+            notice = notice_for(row.rules_reason) if row else None
+            if notice:
+                notices.append(notice)
+            evaluation_results.append(EvaluationResult(
+                session_id=p.session.id, question_id=p.question.id,
+                status=p.question.evaluation_status,
+                evaluation=evaluation_view(p.plan, p.question, row),
+                notice=notice,
+                model_calls=_call_summaries(p.records),
+            ))
+
+    return BatchEvaluationResult(
+        session_id=session_id,
+        total_evaluated=len(evaluation_results),
+        evaluations=evaluation_results,
+        notices=list(dict.fromkeys(notices)),
+    )
 
 
 @router.get("/interview-sessions/{session_id}/evaluations", response_model=EvaluationList)

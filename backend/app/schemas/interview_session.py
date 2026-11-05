@@ -10,10 +10,12 @@ from app.services.interview_state_machine import ClientAction
 
 
 class InterviewSessionCreate(BaseModel):
-    """Empty on purpose: the session is for the signed-in candidate (Phase 12). A candidate_id
-    sent by the client is refused (422), never trusted."""
+    """The session is for the signed-in candidate (Phase 12). A candidate_id
+    sent by the client is refused (422), never trusted. abandon_active allows
+    atomically abandoning any active session to start a new one (AUDIT-008)."""
 
     model_config = ConfigDict(extra="forbid")
+    abandon_active: bool = False
 
 
 class RetryRequest(BaseModel):

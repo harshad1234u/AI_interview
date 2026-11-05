@@ -30,7 +30,7 @@ from app.services.limits import (
     network_key,
     window_start,
 )
-from tests.auth_helpers import api_client
+from tests.auth_helpers import api_client, verify_email_flow
 from tests.fakes import FakeProvider, make_gateway
 from tests.test_evaluation_api import TECH, finished  # noqa: F401  (fixture)
 from tests.test_interview_plan_api import (  # noqa: F401  (fixtures)
@@ -137,31 +137,39 @@ def test_registration_is_limited_per_network(client: TestClient, db_session: Ses
 def test_login_is_limited_per_network_before_any_password_is_checked(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.fake_supabase import FakeSupabaseAuthService
+
     monkeypatch.setattr(auth_routes, "LOGIN", Limit(LOGIN.scope, 3, LOGIN.window))
     assert register(client, "known@example.com").status_code == 201
+    verify_res = verify_email_flow(client, "verify_known@example.com")
+    assert verify_res.status_code == 303
+
     checks = []
-    real = auth_service.verify_password
-    monkeypatch.setattr(auth_service, "verify_password",
-                        lambda pw, stored: checks.append(1) or real(pw, stored))
+    real_login = FakeSupabaseAuthService.login
+
+    async def mock_login(self, email: str, password: str):
+        checks.append(1)
+        return await real_login(self, email, password)
+
+    monkeypatch.setattr(FakeSupabaseAuthService, "login", mock_login)
     attempt = lambda email: client.post(  # noqa: E731
         "/api/auth/login", json={"email": email, "password": "wrong password"})
     assert [attempt("known@example.com").status_code for _ in range(3)] == [401, 401, 401]
     assert len(checks) == 3
     known, unknown = attempt("known@example.com"), attempt("nobody@example.com")
-    # The same answer whether or not the email exists, and no password was hashed for either.
+    # The same answer whether or not the email exists, and no password was checked for either.
     assert (known.status_code, known.json()) == (unknown.status_code, unknown.json())
     assert known.status_code == 429 and "Retry-After" in known.headers
     assert re.search(r"Please try again in (1 minute|([2-9]|1[0-5]) minutes)\.$", known.json()["detail"])
     assert len(checks) == 3
-    # Throttled attempts never reached the account: its failure count is unchanged.
-    assert db_session.scalar(select(Candidate.failed_logins)
-                             .where(Candidate.email == "known@example.com")) == 3
 
 
 def test_a_correct_password_is_throttled_too(client: TestClient,
                                              monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(auth_routes, "LOGIN", Limit(LOGIN.scope, 1, LOGIN.window))
     assert register(client, "ok@example.com").status_code == 201
+    verify_res = verify_email_flow(client, "verify_ok@example.com")
+    assert verify_res.status_code == 303
     good = {"email": "ok@example.com", "password": "correct horse"}
     assert client.post("/api/auth/login", json=good).status_code == 200
     assert client.post("/api/auth/login", json=good).status_code == 429
@@ -174,7 +182,11 @@ def test_a_correct_password_is_throttled_too(client: TestClient,
 def signed_in(client: TestClient) -> str:
     res = register(client, "resumes@example.com")
     assert res.status_code == 201
-    return res.json()["id"]
+    verify_res = verify_email_flow(client, "verify_resumes@example.com")
+    assert verify_res.status_code == 303
+    me_res = client.get("/api/auth/me")
+    assert me_res.status_code == 200
+    return me_res.json()["id"]
 
 
 def test_uploads_are_limited_per_candidate_per_day(

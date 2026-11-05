@@ -714,7 +714,8 @@ def _apply(db: Session, session: InterviewSession, ctx: TurnContext, step: Step,
 
 
 def submit_answer(db: Session, session_id: uuid.UUID, question_id: uuid.UUID, kind: AnswerKind,
-                  text: str | None) -> tuple[InterviewSession, InterviewQuestion]:
+                  text: str | None, speech_duration_ms: int | None = None,
+                  speech_wpm: int | None = None) -> tuple[InterviewSession, InterviewQuestion]:
     """§6.4, under the row lock. `text` is already stripped and length-checked. A replay of the
     stored answer changes nothing. The caller commits."""
     session = lock_session(db, session_id)
@@ -739,6 +740,10 @@ def submit_answer(db: Session, session_id: uuid.UUID, question_id: uuid.UUID, ki
     question.answer_kind, question.answer_text = kind, text
     question.answered_at = func.clock_timestamp()
     question.evaluation_status = EvaluationStatus.NOT_EVALUATED  # D10a: stored, not evaluated
+    if speech_duration_ms is not None:
+        question.speech_duration_ms = speech_duration_ms
+    if speech_wpm is not None:
+        question.speech_wpm = speech_wpm
     db.flush()
     for event in (E.ANSWER_SUBMITTED, E.ANSWER_PROCESSED, E.ANSWER_EVALUATED):
         apply_event(db, session.id, event)  # one transaction: no in-between state is committed

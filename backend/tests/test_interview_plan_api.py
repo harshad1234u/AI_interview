@@ -422,13 +422,14 @@ def test_database_unavailable_is_503(dead_database_client: TestClient) -> None:
         assert res.status_code == 503
 
 
-def test_plan_routes_not_served_in_production() -> None:
+def test_plan_routes_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = TestClient(create_app(
         Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x", environment="production")
     ), headers={"Origin": "http://localhost:3000"})
     sid = uuid.uuid4()
-    assert prod.post(f"/api/interview-sessions/{sid}/plan", json=SETTINGS).status_code == 404
-    assert prod.get(f"/api/interview-sessions/{sid}/plan").status_code == 404
+    assert prod.post(f"/api/interview-sessions/{sid}/plan", json=SETTINGS).status_code == 401
+    assert prod.get(f"/api/interview-sessions/{sid}/plan").status_code == 401
 
 
 def test_logs_carry_ids_and_codes_only(

@@ -9,9 +9,14 @@ const NAME_MAX_LENGTH = 200;
 // A 401 from these means "wrong email or password", not "your session ended".
 const CREDENTIAL_PATHS = ["/api/auth/login", "/api/auth/register"];
 
-/** Whether a response should send the browser to the login page. */
+/** Whether a response should send the browser to the login page.
+ * Unauthenticated calls to /api/auth/me on the home landing page ("/") do not redirect,
+ * allowing the public product showcase to render. */
 export function shouldRedirectToLogin(status: number, apiPath: string, pagePath: string): boolean {
-  return status === 401 && !CREDENTIAL_PATHS.includes(apiPath) && pagePath !== LOGIN_PATH;
+  if (status !== 401) return false;
+  if (CREDENTIAL_PATHS.includes(apiPath)) return false;
+  if (apiPath === "/api/auth/me" && pagePath === "/") return false;
+  return pagePath !== LOGIN_PATH;
 }
 
 export type AuthMode = "login" | "register";

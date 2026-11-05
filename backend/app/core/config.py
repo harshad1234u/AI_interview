@@ -1,3 +1,4 @@
+import base64
 from functools import lru_cache
 from typing import Literal, Self
 
@@ -8,7 +9,10 @@ AI_PROVIDER_NAMES = ("groq", "gemini", "nvidia")
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", "backend/.env"),
+        extra="ignore"
+    )
 
     database_url: str = Field(min_length=1)
     environment: Literal["development", "test", "production"] = "development"
@@ -20,8 +24,32 @@ class Settings(BaseSettings):
     # Marks the session cookie Secure (sent over HTTPS only). Turn on whenever the API is
     # served over HTTPS; plain-HTTP local development needs it off.
     auth_cookie_secure: bool = False
+    cookie_secure: bool | None = None
+    # Optional domain for cookies (e.g. '.yourdomain.com' for shared root domains).
+    # Omit or leave empty for host-only cookies (e.g. separate Vercel and Render subdomains).
+    cookie_domain: str | None = None
+    # SameSite policy: 'lax' (standard/shared domain) or 'none' (cross-site Vercel -> Render).
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
     # The application's own log lines (ids, enum codes, timings; never content), on stderr.
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    # Supabase Auth Configuration
+    supabase_url: str = "https://ccvnligpunynsxymrane.supabase.co"
+    supabase_anon_key: str = ""
+    supabase_service_role_key: SecretStr | None = None
+
+    # Server-Side Token Encryption (AES-256-GCM)
+    # Default 32-byte hex key for dev if unset
+    session_encryption_key: SecretStr = Field(
+        default=SecretStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+    )
+    session_key_id: str = "k1"
+    session_encryption_key_fallback: SecretStr | None = None
+    session_fallback_key_id: str = "k0"
+
+    # BFF & Frontend Routing URLs
+    fastapi_public_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:3000"
 
     # AI model gateway. Empty AI_PROVIDERS = AI disabled (resume processing still works).
     # Comma-separated, in order: the first is the primary, the rest are fallbacks.
@@ -40,8 +68,59 @@ class Settings(BaseSettings):
     nvidia_model: str | None = None
 
     @property
+    def session_key_bytes(self) -> bytes:
+        val = self.session_encryption_key.get_secret_value().strip()
+        if len(val) == 64:
+            try:
+                return bytes.fromhex(val)
+            except ValueError:
+                pass
+        try:
+            decoded = base64.b64decode(val)
+            if len(decoded) == 32:
+                return decoded
+        except Exception:
+            pass
+        return val.encode("utf-8").ljust(32, b"\0")[:32]
+
+    @property
+    def session_fallback_key_bytes(self) -> bytes | None:
+        if not self.session_encryption_key_fallback:
+            return None
+        val = self.session_encryption_key_fallback.get_secret_value().strip()
+        if len(val) == 64:
+            try:
+                return bytes.fromhex(val)
+            except ValueError:
+                pass
+        try:
+            decoded = base64.b64decode(val)
+            if len(decoded) == 32:
+                return decoded
+        except Exception:
+            pass
+        return val.encode("utf-8").ljust(32, b"\0")[:32]
+
+    @property
     def ai_provider_list(self) -> list[str]:
         return [p.strip().lower() for p in self.ai_providers.split(",") if p.strip()]
+
+    @model_validator(mode="after")
+    def resolve_cookie_settings(self) -> Self:
+        if self.cookie_secure is not None:
+            self.auth_cookie_secure = self.cookie_secure
+        else:
+            self.cookie_secure = self.auth_cookie_secure
+
+        if self.cookie_domain is not None:
+            cleaned = self.cookie_domain.strip()
+            self.cookie_domain = cleaned if cleaned else None
+
+        # Browsers reject SameSite=None unless Secure=True
+        if self.cookie_samesite == "none":
+            self.auth_cookie_secure = True
+            self.cookie_secure = True
+        return self
 
     @model_validator(mode="after")
     def check_ai_providers(self) -> Self:

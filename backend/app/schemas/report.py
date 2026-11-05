@@ -123,6 +123,17 @@ class Unavailable(BaseModel):
     note: str
 
 
+class AvailableSpeechMetrics(BaseModel):
+    available: Literal[True] = True
+    note: str
+    total_spoken_seconds: int
+    average_wpm: int | None = None
+    spoken_answers_count: int
+
+
+SpeechMetrics = AvailableSpeechMetrics | Unavailable
+
+
 class RetryAvailability(BaseModel):
     """Whether POST .../retry has topics to practise (Phase 10). The report never creates one."""
 
@@ -139,7 +150,7 @@ class AnswerObservation(BaseModel):
 
 class CommunicationObservations(BaseModel):
     answers: list[AnswerObservation]
-    speech_metrics: Unavailable
+    speech_metrics: SpeechMetrics
 
 
 class TopicToPractise(BaseModel):

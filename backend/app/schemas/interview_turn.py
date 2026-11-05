@@ -113,6 +113,8 @@ class AnswerRequest(BaseModel):
     kind: AnswerKind
     # Length is checked explicitly by the route (exact 422 message, D5), not here.
     text: str | None = None
+    speech_duration_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    speech_wpm: Annotated[int, Field(ge=0, le=1000)] | None = None
 
 
 # ---------- responses ----------
@@ -157,6 +159,8 @@ class QuestionView(BaseModel):
     rules_reason: RulesReason | None
     asked_at: datetime
     answer: AnswerView | None
+    speech_duration_ms: int | None = None
+    speech_wpm: int | None = None
 
 
 class Progress(BaseModel):

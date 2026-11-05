@@ -8,7 +8,8 @@ psycopg[binary]==3.3.6
 pypdf==6.19.0
 python-multipart==0.0.32
 # HTTP client for AI provider adapters (also used by FastAPI's TestClient)
-httpx2==2.13.1
+httpx>=0.27.0
+cryptography>=42.0.0
 
 # test
 pytest==9.1.1

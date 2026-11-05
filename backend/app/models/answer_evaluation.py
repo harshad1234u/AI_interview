@@ -24,9 +24,9 @@ class Rubric(StrEnum):
 
 
 class Criterion(StrEnum):
-    # TECHNICAL_PROJECT: relevance, completeness, reasoning, communication (PRD §10/§21).
+    # TECHNICAL_PROJECT: technical_accuracy, relevance, completeness, reasoning, communication.
     # BEHAVIORAL_HR: relevance, structure, specificity, evidence, reflection, outcome (PRD §41).
-    # No technical-accuracy criterion: correctness needs reference material that doesn't exist.
+    TECHNICAL_ACCURACY = "technical_accuracy"
     RELEVANCE = "relevance"
     COMPLETENESS = "completeness"
     REASONING = "reasoning"

@@ -435,16 +435,17 @@ def test_upload_logs_no_resume_content_or_names(
         assert leak not in caplog.text
 
 
-def test_resume_routes_not_served_in_production() -> None:
+def test_resume_routes_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = create_app(
         Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x", environment="production")
     )
     c = TestClient(prod, headers={"Origin": "http://localhost:3000"})
-    assert c.get(f"/api/resumes/{uuid.uuid4()}").status_code == 404
-    assert c.get(f"/api/candidates/{uuid.uuid4()}/resumes").status_code == 404
+    assert c.get(f"/api/resumes/{uuid.uuid4()}").status_code == 401
+    assert c.get(f"/api/candidates/{uuid.uuid4()}/resumes").status_code == 401
     res = c.post("/api/resumes", data={"candidate_id": str(uuid.uuid4())},
                  files={"file": ("r.pdf", RESUME_PDF, "application/pdf")})
-    assert res.status_code == 404
+    assert res.status_code == 401
 
 
 # ---------- review: approve / reject / edit ----------

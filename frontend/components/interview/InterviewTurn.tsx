@@ -1,36 +1,34 @@
 "use client";
 
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type AnswerKind,
   type ClientAction,
   type InterviewStatus,
+  type QuestionView,
   type TurnResult,
   actOnSession,
   getInterviewSession,
+  getQuestions,
   nextQuestion,
   saveExpressionObservation,
   submitAnswer,
 } from "@/lib/api";
-import CameraPanel from "@/components/interview/CameraPanel";
 import type { Camera } from "@/components/interview/useExpressionCamera";
 import type { Voice } from "@/components/interview/useVoice";
-import { VoiceStage } from "@/components/interview/VoicePanel";
-import { appendTranscript, describeSpeech, speechMetrics } from "@/lib/voice";
+import { appendTranscript, speechMetrics } from "@/lib/voice";
 import {
-  ANSWER_KIND_LABEL,
-  ANSWER_MAX_LENGTH,
-  ANSWER_WARN_AT,
   COPY,
-  QUESTION_KIND_LABEL,
-  RULES_REASON_TEXT,
-  answerLength,
   errorText,
-  formatRemaining,
   isConflict,
   isNetworkError,
   screenFor,
 } from "@/lib/interview";
+import InterviewHeader from "@/components/interview/InterviewHeader";
+import QuestionsPanel from "@/components/interview/QuestionsPanel";
+import CandidateCamera from "@/components/interview/CandidateCamera";
+import VoiceHub from "@/components/interview/VoiceHub";
+import InterviewControls from "@/components/interview/InterviewControls";
 
 type Props = {
   sessionId: string;
@@ -41,32 +39,36 @@ type Props = {
   setDraft: (text: string) => void;
   camera: Camera;
   voice: Voice;
+  attempt?: number;
 };
 
-const OTHER_KINDS: AnswerKind[] = ["CLARIFY", "DONT_KNOW", "SKIP"];
-
-/** Seconds left as shown: the server's figure, counted down locally between requests. The
- * server alone decides whether an answer is in time. */
-function useCountdown(turn: TurnResult | null, fetchedAt: number) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  if (!turn) return null;
-  return turn.progress.time_remaining_seconds - Math.max(0, now - fetchedAt) / 1000;
-}
-
-export default function InterviewTurn({ sessionId, paused, onStatus, draft, setDraft, camera, voice }: Props) {
+export default function InterviewTurn({
+  sessionId,
+  paused,
+  onStatus,
+  draft,
+  setDraft,
+  camera,
+  voice,
+  attempt,
+}: Props) {
   const [turn, setTurn] = useState<TurnResult | null>(null);
-  const [fetchedAt, setFetchedAt] = useState(0); // when the server's time figure arrived
+  const [historyQuestions, setHistoryQuestions] = useState<QuestionView[]>([]);
+  const [fetchedAt, setFetchedAt] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // After a refusal (e.g. the time limit) the page waits for the candidate before moving on, so
-  // the unsent text stays visible next to the server's message.
   const [blocked, setBlocked] = useState(false);
   const questionRef = useRef<HTMLParagraphElement>(null);
-  const remaining = useCountdown(turn, fetchedAt);
+
+  // Load session questions history for the left panel
+  const loadHistory = useCallback(async () => {
+    try {
+      const hist = await getQuestions(sessionId);
+      if (hist?.questions) setHistoryQuestions(hist.questions);
+    } catch {
+      // Non-critical background fetch: ignore error
+    }
+  }, [sessionId]);
 
   const loadNext = useCallback(async () => {
     setBusy(true);
@@ -76,22 +78,50 @@ export default function InterviewTurn({ sessionId, paused, onStatus, draft, setD
       if (result.question === null) return onStatus(result.status); // finished: feedback next
       setFetchedAt(Date.now());
       setTurn(result);
+      await loadHistory();
     } catch (err) {
       setError(errorText(err));
       if (isConflict(err)) setBlocked(true);
     } finally {
       setBusy(false);
     }
-  }, [sessionId, onStatus]);
+  }, [sessionId, onStatus, loadHistory]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount
-    if (!paused) loadNext();
-  }, [paused, loadNext]);
+    if (paused) return;
+    let ignore = false;
+    nextQuestion(sessionId)
+      .then(async (result) => {
+        if (ignore) return;
+        if (result.question === null) {
+          onStatus(result.status);
+          return;
+        }
+        setFetchedAt(Date.now());
+        setTurn(result);
+        setError(null);
+        setBusy(false);
+        try {
+          const hist = await getQuestions(sessionId);
+          if (!ignore && hist?.questions) setHistoryQuestions(hist.questions);
+        } catch {
+          // Non-critical
+        }
+      })
+      .catch((err) => {
+        if (ignore) return;
+        setError(errorText(err));
+        if (isConflict(err)) setBlocked(true);
+        setBusy(false);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [sessionId, paused, onStatus]);
 
   const questionId = turn?.question?.id;
   useEffect(() => {
-    if (questionId) questionRef.current?.focus(); // a new question: move focus to it
+    if (questionId) questionRef.current?.focus();
   }, [questionId]);
 
   // Camera samples belong to the open question; none are taken while paused.
@@ -101,22 +131,25 @@ export default function InterviewTurn({ sessionId, paused, onStatus, draft, setD
     setPaused(paused);
   }, [questionId, paused, setQuestion, setPaused]);
 
-  // Voice mode: a new question is read aloud (and, if chosen, the microphone opens after it).
-  // Spoken words only ever land in the answer box, to be reviewed and edited before sending.
+  // Voice mode: a new question is read aloud, and microphone auto-listens if chosen.
   const draftRef = useRef(draft);
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
   const questionText = turn?.question?.text ?? null;
   const questionTextRef = useRef(questionText);
   useEffect(() => {
     questionTextRef.current = questionText;
   }, [questionText]);
+
   const { enabled: voiceOn, autoRead, autoListen, canSpeak, canListen } = voice;
   const { speak, startListening, silence, resetMetrics } = voice;
+
   const listenInto = useCallback(() => {
     startListening((heard) => setDraft(appendTranscript(draftRef.current, heard)));
   }, [startListening, setDraft]);
+
   useEffect(() => {
     if (!questionId) return;
     resetMetrics();
@@ -128,11 +161,11 @@ export default function InterviewTurn({ sessionId, paused, onStatus, draft, setD
       listenInto();
     }
     return () => silence();
-    // Only a new question (or turning voice on/off) restarts this; preference changes mid-question don't.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questionId, voiceOn]);
+
   useEffect(() => {
-    if (paused) silence(); // a paused interview is silent and the microphone is off
+    if (paused) silence();
   }, [paused, silence]);
 
   async function send(kind: AnswerKind) {
@@ -141,18 +174,29 @@ export default function InterviewTurn({ sessionId, paused, onStatus, draft, setD
     setBusy(true);
     setError(null);
     try {
-      await submitAnswer(sessionId, turn.question.id, kind, kind === "ANSWER" ? draft : undefined);
+      const speechDuration = voice.listenedMs > 0 ? voice.listenedMs : undefined;
+      const metrics = kind === "ANSWER" && speechDuration ? speechMetrics(draft, speechDuration) : null;
+      const speechWpm = metrics?.wordsPerMinute ?? undefined;
+      await submitAnswer(
+        sessionId,
+        turn.question.id,
+        kind,
+        kind === "ANSWER" ? draft : undefined,
+        speechDuration,
+        speechWpm,
+      );
     } catch (err) {
       setError(isNetworkError(err) ? COPY.networkKept : errorText(err));
       if (isConflict(err)) setBlocked(true);
       setBusy(false);
       return;
     }
-    setDraft(""); // saved by the server: only now is the local copy dropped
-    // Counts only, in the background: the interview never waits for (or fails on) the camera.
+    setDraft(""); // dropped only after server saves
     const observation = camera.take(turn.question.id);
-    if (observation) saveExpressionObservation(sessionId, turn.question.id, observation).catch(() => {});
-    setTurn(null); // that question is answered; a failed fetch of the next one offers Try again
+    if (observation) {
+      saveExpressionObservation(sessionId, turn.question.id, observation).catch(() => {});
+    }
+    setTurn(null);
     await loadNext();
   }
 
@@ -170,7 +214,6 @@ export default function InterviewTurn({ sessionId, paused, onStatus, draft, setD
     }
   }
 
-  /** Re-read the session after a refusal and go where the server says. */
   async function proceed() {
     setBusy(true);
     setError(null);
@@ -187,125 +230,150 @@ export default function InterviewTurn({ sessionId, paused, onStatus, draft, setD
   }
 
   const errorBox = error && (
-    <div role="alert">
+    <div role="alert" style={{ width: "100%", margin: "0.5rem 0" }}>
       <p className="form-error">{error}</p>
       {blocked ? (
         <div className="actions">
-          <button type="button" onClick={proceed} disabled={busy}>Continue</button>
+          <button type="button" className="primary" onClick={proceed} disabled={busy}>
+            Continue
+          </button>
         </div>
       ) : (
-        !turn?.question && !paused && (
+        !turn?.question &&
+        !paused && (
           <div className="actions">
-            <button type="button" onClick={loadNext} disabled={busy}>Try again</button>
+            <button type="button" className="primary" onClick={loadNext} disabled={busy}>
+              Try again
+            </button>
           </div>
         )
       )}
     </div>
   );
 
+  // Paused State
   if (paused) {
     return (
-      <>
-        <h2 tabIndex={-1} data-screen-heading>Interview paused</h2>
-        <p>{COPY.paused}</p>
-        {draft && <p className="hint">Your unsent answer is kept on this page until you resume.</p>}
-        {errorBox}
-        <div className="actions">
-          <button type="button" className="primary" onClick={() => act("RESUME")} disabled={busy}>
-            {busy ? "Working…" : "Resume"}
-          </button>
-          <button type="button" onClick={() => act("END_INTERVIEW", COPY.endConfirm)} disabled={busy}>
-            End interview
-          </button>
+      <div className="interview-room" aria-label="Interview paused">
+        <InterviewHeader
+          attempt={attempt}
+          turn={turn}
+          fetchedAt={fetchedAt}
+          paused={true}
+          onPause={() => {}}
+          onResume={() => act("RESUME")}
+          onEnd={() => act("END_INTERVIEW", COPY.endConfirm)}
+          busy={busy}
+        />
+
+        <div className="card" style={{ textAlign: "center", padding: "2.5rem 1.5rem" }}>
+          <span className="badge badge-warning" style={{ fontSize: "0.85rem", padding: "0.3rem 0.8rem" }}>
+            Interview Paused
+          </span>
+          <h2 style={{ margin: "1rem 0 0.5rem" }} tabIndex={-1} data-screen-heading>
+            Your interview is currently on pause
+          </h2>
+          <p className="hint" style={{ maxWidth: "480px", margin: "0 auto 1.5rem" }}>
+            {COPY.paused}
+          </p>
+          {draft && (
+            <p className="hint" style={{ color: "var(--primary)", fontWeight: 500, marginBottom: "1.5rem" }}>
+              ✓ Your unsent answer is safely held in memory.
+            </p>
+          )}
+
+          {errorBox}
+
+          <div className="actions" style={{ justifyContent: "center" }}>
+            <button
+              type="button"
+              className="primary"
+              style={{ padding: "0.75rem 2rem", fontSize: "1rem" }}
+              onClick={() => act("RESUME")}
+              disabled={busy}
+            >
+              {busy ? "Resuming…" : "▶ Resume Interview"}
+            </button>
+            <button
+              type="button"
+              className="danger"
+              onClick={() => act("END_INTERVIEW", COPY.endConfirm)}
+              disabled={busy}
+            >
+              End Interview &amp; Generate Report
+            </button>
+          </div>
         </div>
-        <CameraPanel camera={camera} />
-      </>
+
+        <CandidateCamera camera={camera} voiceListening={false} voiceSpeaking={false} />
+      </div>
     );
   }
 
   const q = turn?.question;
-  const length = answerLength(draft);
   const waiting = turn?.status === "WAITING_FOR_ANSWER";
-
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    send("ANSWER");
-  }
+  const disabledActions = busy || blocked || !waiting;
 
   return (
-    <>
-      <h2 tabIndex={-1} data-screen-heading>Interview</h2>
-      {turn && remaining !== null && (
-        <p className="timer">
-          <span>Time left: <strong>{formatRemaining(remaining)}</strong></span>
-          <span className="hint">{COPY.timerNote}</span>
-        </p>
-      )}
-      {!q && !error && <p aria-live="polite">Loading the next question…</p>}
-      {q && turn && (
-        <form onSubmit={submit}>
-          <div className="question" aria-live="polite">
-            <p className="hint">
-              {QUESTION_KIND_LABEL[q.kind]} · Topic {q.topic_position} of {turn.progress.topics_total}:{" "}
-              {q.topic}
-            </p>
-            <p className="question-text" ref={questionRef} tabIndex={-1}>{q.text}</p>
-            {q.source === "AI" && <p className="hint">{COPY.aiWorded}</p>}
-            {q.source === "RULES" && q.kind !== "TOPIC" && q.rules_reason &&
-              q.rules_reason !== "NOT_REQUESTED" && q.rules_reason !== "NOT_CONFIGURED" && (
-              <p className="hint">{RULES_REASON_TEXT[q.rules_reason]}</p>
-            )}
-          </div>
-          <VoiceStage voice={voice} questionText={q.text} disabled={busy || blocked || !waiting}
-                      onListen={listenInto} />
-          <div className="field">
-            <label htmlFor="answer">Your answer</label>
-            <textarea
-              id="answer"
-              rows={8}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              disabled={blocked}
-              aria-describedby="answer-count"
-              placeholder={voice.enabled && voice.canListen ? "Press “Start speaking”, or type here. Your words appear here for you to edit." : undefined}
+    <div className="interview-room" aria-label="Interview Room">
+      {/* 1. Header Bar: Attempt, Topic Progress, Isolated Timer, Pause/End */}
+      <InterviewHeader
+        attempt={attempt}
+        turn={turn}
+        fetchedAt={fetchedAt}
+        paused={false}
+        onPause={() => act("PAUSE")}
+        onEnd={() => act("END_INTERVIEW", COPY.endConfirm)}
+        busy={busy}
+      />
+
+      {errorBox}
+
+      {/* 2. Main 3-Panel Experience (Left Questions + Center Camera Feed) */}
+      <div className="room-stage">
+        {/* LEFT PANEL: Interview Questions & Navigation */}
+        <QuestionsPanel
+          turn={turn}
+          historyQuestions={historyQuestions}
+          questionRef={questionRef}
+        />
+
+        {/* CENTRE PANEL: Candidate Video Feed & Bottom Voice Hub */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", width: "100%" }}>
+          {/* Prominent Candidate Camera (Horizontally Centered) */}
+          <CandidateCamera
+            camera={camera}
+            voiceListening={voice.listening}
+            voiceSpeaking={voice.speaking}
+          />
+
+          {/* 3. BOTTOM SECTION: Voice-First Interaction Hub */}
+          {q && (
+            <VoiceHub
+              voice={voice}
+              questionText={q.text}
+              disabled={disabledActions}
+              draft={draft}
+              setDraft={setDraft}
+              onListen={listenInto}
+              onSubmit={() => send("ANSWER")}
+              busy={busy}
             />
-            {voice.interim && <span className="hint voice-interim" aria-live="off">{voice.interim}…</span>}
-            {voice.listenedMs > 0 && !voice.listening && (
-              <span className="hint voice-metrics">
-                {describeSpeech(speechMetrics(draft, voice.listenedMs))}
-              </span>
-            )}
-            <span id="answer-count" className={length >= ANSWER_WARN_AT ? "field-error" : "hint"}>
-              {length.toLocaleString()} / {ANSWER_MAX_LENGTH.toLocaleString()} characters
-              {length >= ANSWER_WARN_AT && ` — ${COPY.lengthWarning}`}
-            </span>
-          </div>
-          {errorBox}
-          <div className="actions">
-            <button type="submit" disabled={busy || blocked || !waiting || length === 0}>
-              {busy ? "Sending…" : ANSWER_KIND_LABEL.ANSWER}
-            </button>
-            {OTHER_KINDS.map((kind) => (
-              <button key={kind} type="button" onClick={() => send(kind)}
-                      disabled={busy || blocked || !waiting}>
-                {ANSWER_KIND_LABEL[kind]}
-              </button>
-            ))}
-          </div>
-        </form>
-      )}
-      {!q && errorBox}
-      <div className="actions secondary">
-        <button type="button" onClick={() => act("PAUSE")} disabled={busy || blocked || !waiting}>
-          Pause
-        </button>
-        <button type="button" onClick={() => act("END_INTERVIEW", COPY.endConfirm)}
-                disabled={busy || blocked || !waiting}>
-          End interview
-        </button>
+          )}
+
+          {/* 4. Controls Toolbar */}
+          {q && (
+            <InterviewControls
+              camera={camera}
+              voice={voice}
+              onSend={send}
+              disabled={disabledActions}
+              busy={busy}
+              hasDraft={draft.trim().length > 0}
+            />
+          )}
+        </div>
       </div>
-      <CameraPanel camera={camera} />
-      <p className="hint">{COPY.browserClose}</p>
-    </>
+    </div>
   );
 }

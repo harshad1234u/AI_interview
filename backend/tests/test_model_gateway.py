@@ -4,7 +4,10 @@ import json
 import logging
 import time
 
-import httpx2 as httpx
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx
 import pytest
 from fakes import HANG, FakeProvider, RecordingSleep, make_gateway
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError

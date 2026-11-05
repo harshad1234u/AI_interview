@@ -408,17 +408,18 @@ def test_database_unavailable_is_503(dead_database_client: TestClient) -> None:
         assert res.json() == {"detail": "Service temporarily unavailable. Please try again."}
 
 
-def test_session_routes_not_served_in_production() -> None:
+def test_session_routes_served_in_production() -> None:
+    # AUDIT-001: routers ARE registered in production, so unauthenticated requests return 401 (not 404)
     prod = TestClient(create_app(
         Settings(_env_file=None, database_url="postgresql+psycopg://u:p@h/x", environment="production")
     ), headers={"Origin": "http://localhost:3000"})
     sid = uuid.uuid4()
-    assert prod.post("/api/interview-sessions", json={"candidate_id": str(sid)}).status_code == 404
-    assert prod.get(f"/api/interview-sessions/{sid}").status_code == 404
-    assert prod.get(f"/api/candidates/{sid}/interview-sessions").status_code == 404
+    assert prod.post("/api/interview-sessions", json={"candidate_id": str(sid)}).status_code == 401
+    assert prod.get(f"/api/interview-sessions/{sid}").status_code == 401
+    assert prod.get(f"/api/candidates/{sid}/interview-sessions").status_code == 401
     assert prod.post(f"/api/interview-sessions/{sid}/actions",
-                     json={"action": "PAUSE"}).status_code == 404
-    assert prod.delete(f"/api/interview-sessions/{sid}").status_code == 404
+                     json={"action": "PAUSE"}).status_code == 401
+    assert prod.delete(f"/api/interview-sessions/{sid}").status_code == 401
 
 
 def test_logs_carry_ids_and_states_only(

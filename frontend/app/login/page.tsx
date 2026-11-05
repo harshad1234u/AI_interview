@@ -1,37 +1,44 @@
 import type { Metadata } from "next";
-import Core3D from "@/components/Core3D";
+import Link from "next/link";
+import { Suspense } from "react";
 import LoginForm from "@/components/LoginForm";
 
 export const metadata: Metadata = {
-  title: "Log in — AI Interview Coach",
-  description: "Log in or create an account to practise interviews.",
+  title: "Sign In — AI Interview Coach",
+  description: "Sign in or create an account to start practicing realistic AI job interviews.",
 };
 
 export default function LoginPage() {
   return (
     <main id="content" className="auth-layout">
+      {/* Left Column: Product Value & Privacy Guarantee */}
       <div className="auth-intro">
-      <Core3D className="core3d-login" />
-      <p className="eyebrow">Practice · not a test</p>
-      <h1>AI Interview Coach</h1>
-      <p className="lead">
-        Practice realistic, role-specific interviews and understand exactly how to improve.
-      </p>
-      <section className="card" aria-labelledby="how-heading">
-        <h2 id="how-heading">How it works</h2>
-        <ol className="plain-list numbered">
-          <li>Add your skills and projects, or upload your resume and approve what we find.</li>
-          <li>Plan an interview for a software developer internship: type, difficulty, length.</li>
-          <li>Hear the questions and answer by voice or typing; follow-ups adapt to what you say. Pause whenever you need.</li>
-          <li>Get feedback on each answer with quotes from it, then retry the topics to practise.</li>
-        </ol>
-        <p className="hint">
-          Practice only: no hiring decisions, no scores across people. AI assistance is off unless
-          you turn it on for an interview; fixed rules run the interview otherwise.
+        <Link href="/" className="back-link">
+          ← Back to Overview
+        </Link>
+        <span className="badge badge-primary">Practice Platform</span>
+        <h1 style={{ fontSize: "2.25rem", lineHeight: 1.2 }}>
+          Your Personal AI Interview Coach
+        </h1>
+        <p className="lead">
+          Realistic simulations, voice-first conversations, and detailed rubrics built to elevate your interview performance.
         </p>
-      </section>
+
+        <div className="card" style={{ background: "var(--surface-2)", marginTop: "0.5rem" }}>
+          <h3 style={{ fontSize: "1rem", marginBottom: "0.5rem" }}>Platform Highlights:</h3>
+          <ul className="plain-list" style={{ fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+            <li><strong>Voice-First Practice:</strong> Speak your answers aloud just like an actual interviewer video-call.</li>
+            <li><strong>Resume-Driven Questions:</strong> Tailored to your real skills, projects, and target engineering roles.</li>
+            <li><strong>Strict Privacy:</strong> Audio and facial expressions are processed in-browser and never stored.</li>
+            <li><strong>Actionable Feedback:</strong> Deep evaluations with direct quotes, scoring, and retry recommendations.</li>
+          </ul>
+        </div>
       </div>
-      <LoginForm />
+
+      {/* Right Column: Sleek Auth Card */}
+      <Suspense fallback={<div className="card" style={{ padding: "2rem", textAlign: "center" }}>Loading...</div>}>
+        <LoginForm />
+      </Suspense>
     </main>
   );
 }

@@ -76,11 +76,11 @@ def test_rubric_is_chosen_by_code_from_the_question_type(question_type: str, rub
 
 
 def test_rubrics_are_the_approved_criteria() -> None:
-    assert RUBRICS[Rubric.TECHNICAL_PROJECT] == (C.RELEVANCE, C.COMPLETENESS, C.REASONING,
+    assert RUBRICS[Rubric.TECHNICAL_PROJECT] == (C.TECHNICAL_ACCURACY, C.RELEVANCE, C.COMPLETENESS, C.REASONING,
                                                  C.COMMUNICATION)
     assert RUBRICS[Rubric.BEHAVIORAL_HR] == (C.RELEVANCE, C.STRUCTURE, C.SPECIFICITY, C.EVIDENCE,
                                              C.REFLECTION, C.OUTCOME)  # PRD §41
-    assert "technical_accuracy" not in {c.value for c in C}  # C-E3
+    assert "technical_accuracy" in {c.value for c in C}  # C-E3
 
 
 def test_observations_are_deterministic() -> None:
@@ -198,7 +198,7 @@ def test_scores_are_strict_integers_from_1_to_5(score: object) -> None:
 
 def test_unknown_criteria_are_rejected_by_the_schema() -> None:
     data = proposal()
-    data["criteria"][0]["criterion"] = "technical_accuracy"
+    data["criteria"][0]["criterion"] = "unknown_criterion"
     with pytest.raises(ValidationError):
         EvaluationProposal.model_validate(data)
 

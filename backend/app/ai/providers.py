@@ -15,7 +15,10 @@ extension), so provider output is never trusted: the gateway validates every res
 from functools import lru_cache
 from typing import Any
 
-import httpx2 as httpx
+try:
+    import httpx
+except ImportError:
+    import httpx2 as httpx  # type: ignore[no-redef]
 from pydantic import SecretStr
 
 from app.ai.gateway import (

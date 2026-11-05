@@ -38,12 +38,37 @@ class RegisterRequest(BaseModel):
     password: NewPassword
 
 
+class RegisterResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    verification_required: bool = True
+    message: str = "Verification email sent. Please check your inbox to activate your account."
+
+
 class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     email: Email
     # Any length policy is for new passwords; here only the hashing bound applies.
     password: Annotated[str, StringConstraints(min_length=1, max_length=PASSWORD_MAX_LENGTH)]
+
+
+class ForgotPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: Email
+
+
+class ResetPasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str
+    new_password: NewPassword
+
+
+class MessageResponse(BaseModel):
+    message: str
 
 
 class PartialUpdate(BaseModel):
