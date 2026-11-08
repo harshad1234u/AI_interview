@@ -43,6 +43,7 @@ class Limit:
 REGISTER = Limit("register_ip", 5, timedelta(hours=1))
 LOGIN = Limit("login_ip", 20, timedelta(minutes=15))
 FORGOT_PASSWORD = Limit("forgot_password_ip", 5, timedelta(hours=1))
+RESEND_CONFIRMATION = Limit("resend_confirmation_ip", 5, timedelta(hours=1))
 # Per candidate, per UTC day.
 RESUME_UPLOAD = Limit("resume_upload", 10, DAY)
 AI_EXTRACTION = Limit("ai_extraction", 5, DAY)

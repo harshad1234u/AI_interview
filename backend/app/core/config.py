@@ -123,6 +123,13 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def normalize_urls(self) -> Self:
+        self.fastapi_public_url = self.fastapi_public_url.strip().rstrip("/")
+        self.frontend_url = self.frontend_url.strip().rstrip("/")
+        self.supabase_url = self.supabase_url.strip().rstrip("/")
+        return self
+
+    @model_validator(mode="after")
     def check_ai_providers(self) -> Self:
         names = self.ai_provider_list
         if len(set(names)) != len(names):

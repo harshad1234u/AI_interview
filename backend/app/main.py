@@ -69,7 +69,8 @@ class BodySizeLimit:
 
 class DuplicateSlashNormalizer:
     """Collapses consecutive slashes in request paths (e.g. '//api/health' -> '/api/health')
-    to prevent unintended 404s caused by reverse-proxy rewrites or client URL concatenation."""
+    to prevent unintended 404s caused by reverse-proxy rewrites or client URL concatenation.
+    Also aliases '/health' to '/api/health' for platforms whose default health check is '/health'."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -77,7 +78,9 @@ class DuplicateSlashNormalizer:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             raw_path = scope.get("path", "")
-            if "//" in raw_path:
+            if raw_path == "/health":
+                scope["path"] = "/api/health"
+            elif "//" in raw_path:
                 scope["path"] = re.sub(r"/+", "/", raw_path)
         await self.app(scope, receive, send)
 

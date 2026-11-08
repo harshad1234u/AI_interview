@@ -46,6 +46,7 @@ from app.schemas.candidate import (
     MessageResponse,
     RegisterRequest,
     RegisterResponse,
+    ResendConfirmationRequest,
     ResetPasswordRequest,
 )
 from app.services.auth import (
@@ -56,7 +57,16 @@ from app.services.auth import (
     should_refresh_session,
     start_session,
 )
-from app.services.limits import FORGOT_PASSWORD, LOGIN, REGISTER, Limit, LimitReached, consume, network_key
+from app.services.limits import (
+    FORGOT_PASSWORD,
+    LOGIN,
+    REGISTER,
+    RESEND_CONFIRMATION,
+    Limit,
+    LimitReached,
+    consume,
+    network_key,
+)
 from app.services.supabase_auth_service import (
     EmailNotConfirmedError,
     InvalidCredentialsError,
@@ -77,6 +87,7 @@ THROTTLED = {
     REGISTER.scope: "Too many accounts were created from your network. Please try again in {when}.",
     LOGIN.scope: "Too many sign-in attempts from your network. Please try again in {when}.",
     FORGOT_PASSWORD.scope: "Too many password recovery attempts from your network. Please try again in {when}.",
+    RESEND_CONFIRMATION.scope: "Too many confirmation emails requested from your network. Please try again in {when}.",
 }
 
 
@@ -156,6 +167,30 @@ async def register(
         email=str(body.email),
         verification_required=True,
         message="Verification email sent. Please check your inbox to activate your account.",
+    )
+
+
+@router.post("/resend-confirmation", response_model=MessageResponse, status_code=status.HTTP_200_OK)
+async def resend_confirmation(
+    body: ResendConfirmationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    supabase_auth: SupabaseAuthService = Depends(get_supabase_service),
+) -> MessageResponse:
+    """
+    Safely resends account confirmation email with rate limiting.
+    Always returns 200 OK to prevent account enumeration.
+    """
+    _throttle(db, request, RESEND_CONFIRMATION)
+    redirect_to = f"{settings.fastapi_public_url}/api/auth/verify"
+    try:
+        await supabase_auth.resend_confirmation(email=str(body.email), redirect_to=redirect_to)
+    except Exception as exc:
+        logger.warning("Resend confirmation request failed: %s", exc)
+
+    return MessageResponse(
+        message="If an unconfirmed account exists for this email, a new confirmation link has been sent."
     )
 
 

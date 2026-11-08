@@ -372,7 +372,7 @@ def test_auth_never_logs_secrets_or_personal_data(
 
 def test_auth_routes_cannot_reach_a_model() -> None:
     auth_routes = [r for _, p, r in _routes() if p.startswith("/api/auth/")]
-    assert len(auth_routes) == 11
+    assert len(auth_routes) == 12
     assert not any(_depends_on(r.dependant, get_model_gateway) for r in auth_routes)
 
 
@@ -447,6 +447,7 @@ PUBLIC = {
     ("POST", "/api/auth/logout"),
     ("POST", "/api/auth/forgot-password"),
     ("POST", "/api/auth/reset-password"),
+    ("POST", "/api/auth/resend-confirmation"),
 }
 
 

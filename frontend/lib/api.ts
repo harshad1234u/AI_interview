@@ -156,6 +156,13 @@ export type RegisterResponse = {
 export const register = (input: RegisterInput) =>
   request<RegisterResponse>("/api/auth/register", { method: "POST", body: JSON.stringify(input) });
 
+/** Requests a new verification email for an unconfirmed account. */
+export const resendConfirmation = (email: string) =>
+  request<{ message: string }>("/api/auth/resend-confirmation", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+
 /** Confirms email verification via POST to complete account activation without prefetch consumption. */
 export const confirmEmailVerification = (payload: { token_hash: string; type?: string; csrf_token?: string }) =>
   request<{ status: string; redirect_url: string }>("/api/auth/verify", {

@@ -60,6 +60,12 @@ class ForgotPasswordRequest(BaseModel):
     email: Email
 
 
+class ResendConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: Email
+
+
 class ResetPasswordRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
