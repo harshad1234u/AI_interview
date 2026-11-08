@@ -236,6 +236,19 @@ class SupabaseAuthService:
 
             return False
 
+    async def resend_confirmation(self, email: str, redirect_to: Optional[str] = None) -> bool:
+        """Resends signup confirmation email via Supabase GoTrue."""
+        url = f"{self.base_url}/auth/v1/resend"
+        payload: Dict[str, Any] = {
+            "type": "signup",
+            "email": email.strip().lower(),
+        }
+        if redirect_to:
+            payload["options"] = {"email_redirect_to": redirect_to}
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(url, json=payload, headers=self._anon_headers())
+            return resp.status_code in (200, 204)
+
     async def recover_password(self, email: str, redirect_to: str) -> bool:
         """Triggers password recovery email from Supabase."""
         url = f"{self.base_url}/auth/v1/recover"

@@ -1,9 +1,9 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState, useSyncExternalStore } from "react";
 import { useAuth } from "@/components/AuthProvider";
-import { ApiError, forgotPassword, getApiEndpoint, login, register } from "@/lib/api";
+import { ApiError, forgotPassword, getApiEndpoint, login, register, resendConfirmation } from "@/lib/api";
 import {
   type AuthFieldErrors,
   type AuthForm,
@@ -33,17 +33,57 @@ export default function LoginForm() {
   const [forgotSuccess, setForgotSuccess] = useState<string | null>(null);
   const [forgotBusy, setForgotBusy] = useState(false);
 
+  // Resend confirmation states
+  const [showResend, setShowResend] = useState(false);
+  const [resendEmail, setResendEmail] = useState("");
+  const [resendSuccess, setResendSuccess] = useState<string | null>(null);
+  const [resendBusy, setResendBusy] = useState(false);
+
+  // Extract error from window location hash if Supabase redirected via fragment
+  const hashError = useSyncExternalStore(
+    (callback) => {
+      window.addEventListener("hashchange", callback);
+      return () => window.removeEventListener("hashchange", callback);
+    },
+    () => {
+      if (typeof window === "undefined" || !window.location.hash) return null;
+      const hash = window.location.hash.substring(1);
+      const params = new URLSearchParams(hash);
+      const err = params.get("error");
+      const errCode = params.get("error_code");
+      const errDesc = params.get("error_description");
+      if (errCode === "otp_expired" || err === "access_denied" || err === "verification_expired") {
+        return errDesc
+          ? decodeURIComponent(errDesc.replace(/\+/g, " "))
+          : "Your email verification link has expired or has already been used. Please request a new confirmation link below.";
+      } else if (err) {
+        return errDesc ? decodeURIComponent(errDesc.replace(/\+/g, " ")) : "Authentication error. Please try again.";
+      }
+      return null;
+    },
+    () => null,
+  );
+
   // Check URL query parameters for feedback messages
   const urlError = (() => {
     const err = searchParams?.get("error");
-    if (err === "verification_expired" || err === "verification_invalid") {
-      return "Your verification link has expired or is invalid. Please register again or request a new link.";
+    const errCode = searchParams?.get("error_code");
+    const errDesc = searchParams?.get("error_description");
+
+    if (err === "verification_expired" || err === "verification_invalid" || errCode === "otp_expired") {
+      return "Your verification link has expired or has already been used. Please request a new confirmation link below.";
+    } else if (err === "access_denied") {
+      return errDesc
+        ? decodeURIComponent(errDesc.replace(/\+/g, " "))
+        : "Access denied. Your confirmation link may be expired or invalid. Please request a new link below.";
     } else if (err === "oauth_cancelled") {
       return "Google sign-in was cancelled. Please try again.";
     } else if (err === "oauth_state_invalid" || err === "oauth_state_mismatch") {
       return "OAuth security verification failed. Please try signing in again.";
     } else if (err === "oauth_code_invalid" || err === "oauth_exchange_failed") {
       return "Failed to complete Google sign-in. Please try again.";
+    } else if (hashError) {
+      return hashError;
     }
     return null;
   })();
@@ -61,8 +101,10 @@ export default function LoginForm() {
     setFieldErrors({});
     setError(null);
     setShowForgot(false);
+    setShowResend(false);
     setVerificationSent(null);
     setForgotSuccess(null);
+    setResendSuccess(null);
   }
 
   async function handleGoogleLogin() {
@@ -118,6 +160,21 @@ export default function LoginForm() {
       setForgotSuccess("If an account exists for this email, a password reset link has been sent.");
     } finally {
       setForgotBusy(false);
+    }
+  }
+
+  async function submitResendConfirmation(e: FormEvent) {
+    e.preventDefault();
+    if (!resendEmail.trim()) return;
+    setResendBusy(true);
+    setError(null);
+    try {
+      const res = await resendConfirmation(resendEmail.trim());
+      setResendSuccess(res.message);
+    } catch {
+      setResendSuccess("If an unconfirmed account exists for this email, a new confirmation link has been sent.");
+    } finally {
+      setResendBusy(false);
     }
   }
 
@@ -320,7 +377,56 @@ export default function LoginForm() {
             </div>
           )}
 
-          {activeError && <p className="form-error" role="alert">{activeError}</p>}
+          {showResend && (
+            <div
+              className="notice"
+              style={{
+                marginBottom: "1rem",
+                padding: "1rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border)",
+              }}
+            >
+              <h4 style={{ margin: "0 0 0.5rem 0", fontSize: "0.95rem" }}>Resend confirmation email</h4>
+              {resendSuccess ? (
+                <p style={{ fontSize: "0.85rem", color: "#2e7d32", margin: 0 }}>{resendSuccess}</p>
+              ) : (
+                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  <input
+                    type="email"
+                    placeholder="Enter your email"
+                    value={resendEmail}
+                    onChange={(e) => setResendEmail(e.target.value)}
+                    style={{ flex: 1, padding: "0.4rem 0.6rem", fontSize: "0.85rem" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={submitResendConfirmation}
+                    disabled={resendBusy || !resendEmail}
+                    style={{ padding: "0.4rem 0.8rem", fontSize: "0.85rem" }}
+                  >
+                    {resendBusy ? "Sending…" : "Resend Link"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeError && (
+            <div>
+              <p className="form-error" role="alert">{activeError}</p>
+              {!showResend && (activeError.includes("verification") || activeError.includes("expired") || activeError.includes("Access denied")) && (
+                <button
+                  type="button"
+                  className="link"
+                  onClick={() => setShowResend(true)}
+                  style={{ display: "block", marginTop: "0.4rem", fontSize: "0.85rem", fontWeight: 600 }}
+                >
+                  Resend confirmation email
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="actions" style={{ marginTop: "1.25rem" }}>
             <button type="submit" className="primary" style={{ width: "100%", padding: "0.75rem" }} disabled={busy}>
