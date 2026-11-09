@@ -434,6 +434,44 @@ def test_cors_preflight_and_credentials(client: TestClient) -> None:
     assert res.headers["access-control-allow-credentials"] == "true"
 
 
+def test_verify_origin_and_sec_fetch_site_security(client: TestClient) -> None:
+    # 1. Hostile origin is rejected with 403
+    bad = client.post(
+        "/api/auth/verify",
+        headers={"Origin": "https://evil.example"},
+        json={"token_hash": "a" * 32, "type": "signup", "csrf_token": "fake"},
+    )
+    assert bad.status_code == 403
+    assert bad.json() == {"detail": "Request origin not allowed."}
+
+    # 2. Origin: null with cross-site is rejected with 403
+    bad_null = client.post(
+        "/api/auth/verify",
+        headers={"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+        json={"token_hash": "a" * 32, "type": "signup", "csrf_token": "fake"},
+    )
+    assert bad_null.status_code == 403
+
+    # 3. Origin: null with forged host is rejected with 403
+    bad_host = client.post(
+        "/api/auth/verify",
+        headers={"Origin": "null", "Sec-Fetch-Site": "same-origin", "Host": "evil.example"},
+        json={"token_hash": "a" * 32, "type": "signup", "csrf_token": "fake"},
+    )
+    assert bad_host.status_code == 403
+
+    # 4. Same-origin Sec-Fetch-Site with valid allowed host passes OriginCheck,
+    # then safely fails CSRF validation with redirect / 400 (never 403)
+    ok_origin = client.post(
+        "/api/auth/verify",
+        headers={"Origin": "null", "Sec-Fetch-Site": "same-origin", "Host": "localhost:8000"},
+        json={"token_hash": "a" * 32, "type": "signup", "csrf_token": "fake"},
+        follow_redirects=False,
+    )
+    assert ok_origin.status_code in (302, 303, 400)
+    assert ok_origin.status_code != 403
+
+
 # ---------- 401 sweep: every route needs a session unless it is deliberately public ----------
 
 PUBLIC = {
