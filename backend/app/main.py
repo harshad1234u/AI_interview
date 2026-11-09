@@ -1,3 +1,4 @@
+import copy
 import logging
 import re
 import traceback
@@ -211,7 +212,15 @@ class RedactingFormatter(logging.Formatter):
     """Logging formatter that redacts credentials from final formatted log lines."""
 
     def format(self, record: logging.LogRecord) -> str:
-        formatted = super().format(record)
+        # Shallow-copy the record so mutations (like levelprefix fallback) do not affect
+        # other handlers processing the same LogRecord instance.
+        recordcopy = copy.copy(record)
+        if not getattr(recordcopy, "levelprefix", None):
+            levelname = getattr(recordcopy, "levelname", "INFO")
+            separator = " " * max(1, 8 - len(levelname))
+            recordcopy.levelprefix = f"{levelname}:{separator}"
+
+        formatted = super().format(recordcopy)
         return redact_string(formatted)
 
 

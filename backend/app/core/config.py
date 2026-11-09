@@ -1,6 +1,6 @@
 import base64
 from functools import lru_cache
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -158,3 +158,21 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+if TYPE_CHECKING:
+    settings: Settings
+
+
+def __getattr__(name: str) -> Settings:
+    if name == "settings":
+        return get_settings()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "AI_PROVIDER_NAMES",
+    "Settings",
+    "get_settings",
+    "settings",
+]
