@@ -100,7 +100,7 @@ class OriginCheck:
         if scope["type"] == "http" and scope["method"] not in SAFE_METHODS:
             headers = Headers(scope=scope)
             origin = headers.get("origin")
-            if not origin:
+            if not origin or origin == "null":
                 # Fallback for standard HTML form submissions where browsers send Referer instead of Origin
                 referer = headers.get("referer")
                 if referer:
@@ -109,6 +109,14 @@ class OriginCheck:
                         ref_origin = f"{r_parsed.scheme}://{r_parsed.netloc}"
                         if ref_origin in self.allowed:
                             origin = ref_origin
+                elif headers.get("sec-fetch-site") == "same-origin":
+                    host = headers.get("host")
+                    if host:
+                        for allowed_orig in self.allowed:
+                            parsed_allowed = urlsplit(allowed_orig)
+                            if parsed_allowed.netloc and parsed_allowed.netloc.lower() == host.lower():
+                                origin = allowed_orig
+                                break
             if origin not in self.allowed:
                 response = JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,

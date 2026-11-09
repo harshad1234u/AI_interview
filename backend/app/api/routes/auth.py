@@ -243,7 +243,7 @@ async def verify_email_page(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="referrer" content="no-referrer">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <meta name="robots" content="noindex, nofollow, noarchive">
   <title>Confirm Your Email — AI Interview Coach</title>
   <style>
@@ -339,16 +339,36 @@ async def verify_email_page(
     </form>
   </div>
   <script>
-    document.getElementById("verify-form").addEventListener("submit", function() {{
+    document.getElementById("verify-form").addEventListener("submit", async function(e) {{
+      e.preventDefault();
       var btn = document.getElementById("confirm-btn");
       btn.disabled = true;
       btn.innerText = "Confirming...";
+      try {{
+        var res = await fetch("/api/auth/verify", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json", "Accept": "application/json" }},
+          body: JSON.stringify({{
+            token_hash: "{escaped_hash}",
+            type: "{escaped_type}",
+            csrf_token: "{escaped_csrf}"
+          }})
+        }});
+        var data = await res.json().catch(function() {{ return null; }});
+        if (res.ok && data && data.redirect_url) {{
+          window.location.assign(data.redirect_url);
+        }} else {{
+          window.location.assign("{settings.frontend_url}/login?error=verification_expired");
+        }}
+      }} catch (err) {{
+        window.location.assign("{settings.frontend_url}/login?error=verification_expired");
+      }}
     }});
   </script>
 </body>
 </html>"""
     resp = HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
-    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["X-Content-Type-Options"] = "nosniff"
