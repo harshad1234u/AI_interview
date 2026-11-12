@@ -138,6 +138,7 @@ class FakeSupabaseAuthService:
         return True
 
     async def recover_password(self, email: str, redirect_to: str) -> bool:
+        self.last_recover_redirect_to = redirect_to
         return True
 
     async def update_password(self, access_token: str, new_password: str) -> Dict[str, Any]:

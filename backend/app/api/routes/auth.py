@@ -665,7 +665,7 @@ async def google_oauth_callback(
     db.commit()
 
     redirect_resp = RedirectResponse(
-        url=f"{settings.frontend_url}/interview",
+        url=f"{settings.frontend_url}/",
         status_code=status.HTTP_302_FOUND,
     )
     set_session_cookie(redirect_resp, raw_token, settings)
@@ -721,7 +721,7 @@ async def forgot_password(
 ) -> MessageResponse:
     """Triggers a Supabase password recovery email with a secure reset link."""
     _throttle(db, request, FORGOT_PASSWORD)
-    redirect_url = f"{settings.frontend_url}/login?tab=reset-password"
+    redirect_url = f"{settings.frontend_url}/reset-password"
     try:
         await supabase_auth.recover_password(str(body.email), redirect_to=redirect_url)
     except Exception as exc:

@@ -1270,7 +1270,7 @@ def test_google_oauth_pkce_flow(client: TestClient, fake_supabase) -> None:
     client.cookies.set("oauth_session_flow", start_res.cookies["oauth_session_flow"])
     callback_res = client.get(f"/api/auth/google/callback?code=valid_code&state={state}", follow_redirects=False)
     assert callback_res.status_code == 302
-    assert callback_res.headers["location"].endswith("/interview")
+    assert callback_res.headers["location"] == f"{get_settings().frontend_url}/"
     assert SESSION_COOKIE in callback_res.cookies
 
     # 4. Verify candidate session
@@ -1283,6 +1283,7 @@ def test_password_recovery_and_reset_flow(client: TestClient, fake_supabase) -> 
     forgot_res = client.post("/api/auth/forgot-password", json={"email": "nobody@example.com"})
     assert forgot_res.status_code == 200
     assert "password reset link has been sent" in forgot_res.json()["message"]
+    assert fake_supabase.last_recover_redirect_to == f"{get_settings().frontend_url}/reset-password"
 
     # Reset password
     reset_res = client.post("/api/auth/reset-password", json={"access_token": "valid_token", "new_password": "new_password_123"})
