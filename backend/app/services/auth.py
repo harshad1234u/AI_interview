@@ -46,6 +46,13 @@ class AccountLocked(Exception):
     pass
 
 
+class CandidateIdentityConflict(Exception):
+    """Raised when candidate provisioning encounters conflicting credentials or identity mismatch."""
+    def __init__(self, message: str = "An account with conflicting credentials already exists."):
+        super().__init__(message)
+        self.message = message
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -83,10 +90,17 @@ def provision_or_get_candidate(
         db.flush()
     except IntegrityError:
         db.rollback()
-        # Concurrent insert resolved by unique constraint
+        # Distinguish concurrent duplicate auth_user_id from email uniqueness collision
         candidate = db.scalars(
             select(Candidate).where(Candidate.auth_user_id == auth_user_id)
-        ).one()
+        ).one_or_none()
+        if candidate is not None:
+            return candidate
+        logger.warning(
+            "Candidate provisioning conflict: auth_user_id %s collided on unique constraint (e.g. email)",
+            auth_user_id,
+        )
+        raise CandidateIdentityConflict("An account with conflicting credentials already exists.")
         
     return candidate
 
