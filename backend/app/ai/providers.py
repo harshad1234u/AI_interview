@@ -12,6 +12,7 @@ Provider JSON modes differ (Gemini's layer may ignore the schema, NVIDIA prefers
 extension), so provider output is never trusted: the gateway validates every response itself.
 """
 
+import asyncio
 from functools import lru_cache
 from typing import Any
 
@@ -106,6 +107,13 @@ def _count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+DEFAULT_LIMITS = httpx.Limits(
+    max_keepalive_connections=20,
+    max_connections=50,
+    keepalive_expiry=30.0,
+)
+
+
 class OpenAICompatibleProvider:
     def __init__(
         self,
@@ -116,15 +124,60 @@ class OpenAICompatibleProvider:
         timeout_seconds: float,
         base_url: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        client: httpx.AsyncClient | None = None,
+        limits: httpx.Limits | None = None,
+        connect_timeout_seconds: float = 5.0,
     ) -> None:
         self.name, self.model = name, model
         self._api_key = api_key  # SecretStr: prints as '**********'
         self._base_url = base_url or BASE_URLS[name]
         self._timeout = timeout_seconds
+        self._connect_timeout = min(connect_timeout_seconds, timeout_seconds)
         self._transport = transport
+        self._limits = limits or DEFAULT_LIMITS
+        self._client: httpx.AsyncClient | None = client
+        self._client_loop: asyncio.AbstractEventLoop | None = None
+        self._owns_client: bool = client is None
 
     def __repr__(self) -> str:
         return f"OpenAICompatibleProvider({self.name!r}, model={self.model!r})"
+
+    def _get_client(self) -> httpx.AsyncClient:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if (
+            self._client is None
+            or self._client.is_closed
+            or (self._owns_client and self._client_loop is not None and self._client_loop != current_loop)
+        ):
+            self._client = httpx.AsyncClient(
+                base_url=self._base_url,
+                timeout=httpx.Timeout(self._timeout, connect=self._connect_timeout),
+                limits=self._limits,
+                transport=self._transport,
+            )
+            self._client_loop = current_loop
+            self._owns_client = True
+        elif self._client_loop is None and current_loop is not None and self._owns_client:
+            self._client_loop = current_loop
+
+        return self._client
+
+    async def aclose(self) -> None:
+        """Closes the underlying HTTP client cleanly if owned."""
+        if self._client is not None and not self._client.is_closed and self._owns_client:
+            await self._client.aclose()
+        self._client = None
+        self._client_loop = None
+
+    async def __aenter__(self) -> "OpenAICompatibleProvider":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.aclose()
 
     async def complete(
         self, request: ModelRequest, json_schema: dict[str, Any], max_output_tokens: int
@@ -147,11 +200,9 @@ class OpenAICompatibleProvider:
             **EXTRA_BODY.get(self.name, {}),
         }
         headers = {"Authorization": f"Bearer {self._api_key.get_secret_value()}"}
+        client = self._get_client()
         try:
-            async with httpx.AsyncClient(
-                base_url=self._base_url, timeout=self._timeout, transport=self._transport
-            ) as client:
-                res = await client.post("/chat/completions", json=payload, headers=headers)
+            res = await client.post("/chat/completions", json=payload, headers=headers)
         except httpx.TimeoutException:
             raise ProviderError(ErrorKind.TIMEOUT) from None
         except httpx.TransportError:
@@ -179,9 +230,16 @@ class OpenAICompatibleProvider:
 
 
 def build_gateway(
-    settings: Settings, transport: httpx.AsyncBaseTransport | None = None
+    settings: Settings,
+    transport: httpx.AsyncBaseTransport | None = None,
+    client: httpx.AsyncClient | None = None,
 ) -> ModelGateway | None:
     """None when AI_PROVIDERS is empty: callers then keep the deterministic path only."""
+    limits = httpx.Limits(
+        max_keepalive_connections=settings.ai_pool_max_keepalive,
+        max_connections=settings.ai_pool_max_connections,
+        keepalive_expiry=settings.ai_pool_keepalive_expiry,
+    )
     providers = [
         OpenAICompatibleProvider(
             name,
@@ -189,6 +247,9 @@ def build_gateway(
             getattr(settings, f"{name}_model"),
             timeout_seconds=settings.ai_timeout_seconds,
             transport=transport,
+            client=client,
+            limits=limits,
+            connect_timeout_seconds=settings.ai_connect_timeout_seconds,
         )
         for name in settings.ai_provider_list
     ]
@@ -206,3 +267,13 @@ def build_gateway(
 @lru_cache
 def get_model_gateway() -> ModelGateway | None:
     return build_gateway(get_settings())
+
+
+async def aclose_model_gateway() -> None:
+    """Closes cached gateway resources and clears the lru_cache."""
+    info = get_model_gateway.cache_info()
+    if info.currsize > 0:
+        gateway = get_model_gateway()
+        if gateway is not None and hasattr(gateway, "aclose"):
+            await gateway.aclose()
+    get_model_gateway.cache_clear()
