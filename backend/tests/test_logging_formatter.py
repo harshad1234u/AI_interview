@@ -1,14 +1,11 @@
 """Unit tests for RedactingFormatter and logging configurations."""
 
-import copy
 import io
 import logging
 import sys
 
-import pytest
-
-from app.core.config import Settings, get_settings
-from app.main import RedactingFormatter, configure_logging, redact_string
+from app.core.config import Settings
+from app.main import RedactingFormatter
 
 
 def test_ordinary_log_record_with_levelprefix_format():
@@ -191,6 +188,172 @@ def test_uvicorn_404_access_log_formatting():
     assert "secret_query_val" not in output
     # Original record must remain unmutated
     assert not hasattr(record, "levelprefix")
+
+
+def test_uvicorn_access_log_with_client_info_in_args():
+    """Verify Uvicorn access record with client information in positional args is extracted."""
+    uvicorn_fmt = '%(levelprefix)s%(client_addr)s - "%(request_line)s" %(status_code)s'
+    fmt = RedactingFormatter(uvicorn_fmt)
+
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=90,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("192.168.1.100:54321", "GET", "/api/health", "1.1", 200),
+        exc_info=None,
+    )
+
+    output = fmt.format(record)
+    assert output.startswith("INFO:   ")
+    assert '192.168.1.100:54321 - "GET /api/health HTTP/1.1" 200' in output
+    # Original record must not be mutated
+    assert not hasattr(record, "client_addr")
+    assert not hasattr(record, "request_line")
+    assert not hasattr(record, "status_code")
+    assert not hasattr(record, "levelprefix")
+    assert record.args == ("192.168.1.100:54321", "GET", "/api/health", "1.1", 200)
+
+
+def test_uvicorn_access_log_without_client_addr_in_args_uses_neutral_unknown():
+    """Verify Uvicorn access record with missing/empty client falls back to 'unknown'."""
+    uvicorn_fmt = '%(levelprefix)s%(client_addr)s - "%(request_line)s" %(status_code)s'
+    fmt = RedactingFormatter(uvicorn_fmt)
+
+    for empty_client in ("", None):
+        record = logging.LogRecord(
+            name="uvicorn.access",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=95,
+            msg='%s - "%s %s HTTP/%s" %d',
+            args=(empty_client, "GET", "/api/auth/me", "1.1", 401),
+            exc_info=None,
+        )
+
+        output = fmt.format(record)
+        assert output.startswith("INFO:   ")
+        # Must use neutral fallback 'unknown', never an invented IP address
+        assert 'unknown - "GET /api/auth/me HTTP/1.1" 401' in output
+        assert not hasattr(record, "client_addr")
+        assert not hasattr(record, "levelprefix")
+
+
+def test_uvicorn_access_log_with_tuple_client_info():
+    """Verify Uvicorn access record with tuple client address is formatted properly."""
+    uvicorn_fmt = '%(levelprefix)s%(client_addr)s - "%(request_line)s" %(status_code)s'
+    fmt = RedactingFormatter(uvicorn_fmt)
+
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=100,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=(("10.0.0.1", 8080), "POST", "/api/auth/login", "1.1", 401),
+        exc_info=None,
+    )
+
+    output = fmt.format(record)
+    assert output.startswith("INFO:   ")
+    assert '10.0.0.1:8080 - "POST /api/auth/login HTTP/1.1" 401' in output
+    assert not hasattr(record, "client_addr")
+
+
+def test_application_log_formatted_by_access_formatter_does_not_crash():
+    """Verify an ordinary application log sent to an access formatter receives safe defaults."""
+    uvicorn_fmt = '%(levelprefix)s%(client_addr)s - "%(request_line)s" %(status_code)s'
+    fmt = RedactingFormatter(uvicorn_fmt)
+
+    record = logging.LogRecord(
+        name="app.main",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=105,
+        msg="Cleaned up %d expired auth sessions",
+        args=(3,),
+        exc_info=None,
+    )
+
+    output = fmt.format(record)
+    assert output.startswith("INFO:   ")
+    assert 'unknown - "Cleaned up 3 expired auth sessions" -' in output
+    # Original record must not be mutated
+    assert not hasattr(record, "client_addr")
+    assert not hasattr(record, "request_line")
+    assert not hasattr(record, "status_code")
+    assert not hasattr(record, "levelprefix")
+
+
+def test_preserves_existing_valid_structured_fields():
+    """Verify that existing valid structured logging fields are preserved and not overwritten."""
+    uvicorn_fmt = '%(levelprefix)s%(client_addr)s [%(request_id)s] - "%(request_line)s" %(status_code)s'
+    fmt = RedactingFormatter(uvicorn_fmt)
+
+    record = logging.LogRecord(
+        name="app.api",
+        level=logging.WARNING,
+        pathname=__file__,
+        lineno=110,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("1.2.3.4", "GET", "/api/test", "1.1", 200),
+        exc_info=None,
+    )
+    # Explicitly set fields on record
+    record.client_addr = "custom.proxy.domain:443"
+    record.request_id = "req_trace_98765"
+    record.status_code = 429
+    record.request_line = "GET /api/test?custom=1 HTTP/1.1"
+
+    output = fmt.format(record)
+    assert 'custom.proxy.domain:443 [req_trace_98765] - "GET /api/test?custom=1 HTTP/1.1" 429' in output
+    # Original values remain intact
+    assert record.client_addr == "custom.proxy.domain:443"
+    assert record.request_id == "req_trace_98765"
+    assert record.status_code == 429
+
+
+def test_missing_arbitrary_contextual_fields_receive_safe_defaults():
+    """Verify format strings with arbitrary missing contextual fields format cleanly without exceptions."""
+    custom_fmt = "%(levelname)s [%(request_id)s] [%(duration_ms)s] %(client_addr)s %(message)s"
+    fmt = RedactingFormatter(custom_fmt)
+
+    record = logging.LogRecord(
+        name="app.metrics",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=115,
+        msg="Transaction complete for item %s",
+        args=("A100",),
+        exc_info=None,
+    )
+
+    output = fmt.format(record)
+    assert output == "INFO [-] [-] unknown Transaction complete for item A100"
+    assert not hasattr(record, "request_id")
+    assert not hasattr(record, "duration_ms")
+    assert not hasattr(record, "client_addr")
+
+
+def test_brace_format_style_support():
+    """Verify RedactingFormatter supports Python str.format style ('{') without KeyError/ValueError."""
+    brace_fmt = "{levelprefix}{client_addr} - {message} [{status_code}]"
+    fmt = RedactingFormatter(brace_fmt, style="{")
+
+    record = logging.LogRecord(
+        name="app.test",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=120,
+        msg="Database timeout on port %d",
+        args=(5432,),
+        exc_info=None,
+    )
+
+    output = fmt.format(record)
+    assert output.startswith("ERROR:  ")
+    assert "unknown - Database timeout on port 5432 [-]" in output
 
 
 def test_config_settings_lazy_resolution():
