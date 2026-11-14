@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { type FormEvent, useEffect, useState, useSyncExternalStore } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { ApiError, forgotPassword, getApiEndpoint, login, register, resendConfirmation } from "@/lib/api";
 import {
@@ -29,6 +29,42 @@ export default function LoginForm() {
   // Verification & Recovery states
   const [verificationSent, setVerificationSent] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+
+  const togglePasswordVisibility = useCallback(() => {
+    const input = passwordInputRef.current;
+    const emailInput = emailInputRef.current;
+
+    const updates: Partial<AuthForm> = {};
+    if (input && input.value && input.value !== form.password) {
+      updates.password = input.value;
+    }
+    if (emailInput && emailInput.value && emailInput.value !== form.email) {
+      updates.email = emailInput.value;
+    }
+    if (Object.keys(updates).length > 0) {
+      setForm((prev) => ({ ...prev, ...updates }));
+    }
+
+    const hadFocus = input ? document.activeElement === input : false;
+    const start = input?.selectionStart ?? null;
+    const end = input?.selectionEnd ?? null;
+    const direction = input?.selectionDirection ?? undefined;
+
+    setShowPassword((prev) => !prev);
+
+    if (hadFocus && input && start !== null && end !== null) {
+      requestAnimationFrame(() => {
+        try {
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(start, end, direction);
+        } catch {
+          // Browser may restrict setSelectionRange on certain input types
+        }
+      });
+    }
+  }, [form.email, form.password]);
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSuccess, setForgotSuccess] = useState<string | null>(null);
@@ -117,7 +153,17 @@ export default function LoginForm() {
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    const errors = validateAuthForm(mode, form);
+    const currentPassword = form.password || passwordInputRef.current?.value || "";
+    const currentEmail = form.email || emailInputRef.current?.value || "";
+    const currentForm: AuthForm = {
+      ...form,
+      email: currentEmail,
+      password: currentPassword,
+    };
+    if (currentEmail !== form.email || currentPassword !== form.password) {
+      setForm(currentForm);
+    }
+    const errors = validateAuthForm(mode, currentForm);
     setFieldErrors(errors);
     setError(Object.keys(errors).length ? "Please fix the highlighted fields." : null);
     if (Object.keys(errors).length) return;
@@ -125,12 +171,12 @@ export default function LoginForm() {
     setVerificationSent(null);
 
     try {
-      const email = form.email.trim();
+      const email = currentForm.email.trim();
       if (mode === "login") {
-        const candidateProfile = await login({ email, password: form.password });
+        const candidateProfile = await login({ email, password: currentForm.password });
         setCandidate(candidateProfile);
       } else {
-        const res = await register({ name: form.name.trim(), email, password: form.password });
+        const res = await register({ name: currentForm.name.trim(), email, password: currentForm.password });
         setVerificationSent(res.email);
         setForm(EMPTY);
       }
@@ -326,6 +372,7 @@ export default function LoginForm() {
               {key === "password" ? (
                 <div className="password-input-wrapper">
                   <input
+                    ref={passwordInputRef}
                     id={key}
                     name={key}
                     type={showPassword ? "text" : "password"}
@@ -335,6 +382,11 @@ export default function LoginForm() {
                     minLength={mode === "register" ? PASSWORD_MIN_LENGTH : undefined}
                     value={form[key]}
                     onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                    onFocus={(e) => {
+                      if (e.target.value && e.target.value !== form.password) {
+                        setForm((prev) => ({ ...prev, password: e.target.value }));
+                      }
+                    }}
                     aria-invalid={Boolean(fieldErrors[key])}
                     aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                     placeholder="••••••••"
@@ -342,8 +394,13 @@ export default function LoginForm() {
                   <button
                     type="button"
                     className="password-toggle-btn"
-                    onClick={() => setShowPassword((prev) => !prev)}
+                    onClick={togglePasswordVisibility}
+                    onMouseDown={(e) => {
+                      // Prevent focus theft on mouse click while preserving keyboard accessibility
+                      e.preventDefault();
+                    }}
                     aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
                     title={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? (
@@ -361,6 +418,7 @@ export default function LoginForm() {
                 </div>
               ) : (
                 <input
+                  ref={key === "email" ? emailInputRef : undefined}
                   id={key}
                   name={key}
                   type={type}
@@ -369,6 +427,11 @@ export default function LoginForm() {
                   maxLength={key === "name" ? 200 : undefined}
                   value={form[key]}
                   onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                  onFocus={(e) => {
+                    if (key === "email" && e.target.value && e.target.value !== form.email) {
+                      setForm((prev) => ({ ...prev, email: e.target.value }));
+                    }
+                  }}
                   aria-invalid={Boolean(fieldErrors[key])}
                   aria-describedby={fieldErrors[key] ? `${key}-error` : undefined}
                   placeholder={key === "email" ? "you@example.com" : "Jane Doe"}
