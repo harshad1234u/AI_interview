@@ -12,6 +12,7 @@ from pydantic import (
     SerializerFunctionWrapHandler,
     StrictBool,
     StringConstraints,
+    field_validator,
     model_serializer,
 )
 
@@ -115,6 +116,13 @@ class AnswerRequest(BaseModel):
     text: str | None = None
     speech_duration_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
     speech_wpm: Annotated[int, Field(ge=0, le=1000)] | None = None
+
+    @field_validator("speech_duration_ms", "speech_wpm", mode="before")
+    @classmethod
+    def _coerce_speech_ints(cls, v: Any) -> Any:
+        if isinstance(v, (int, float)):
+            return round(v)
+        return v
 
 
 # ---------- responses ----------

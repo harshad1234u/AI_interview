@@ -199,7 +199,7 @@ export default function InterviewTurn({
 
     // STEP 1: Submit and persist the answer
     try {
-      const speechDuration = voice.listenedMs > 0 ? voice.listenedMs : undefined;
+      const speechDuration = voice.listenedMs > 0 ? Math.round(voice.listenedMs) : undefined;
       const metrics = kind === "ANSWER" && speechDuration ? speechMetrics(draft, speechDuration) : null;
       const speechWpm = metrics?.wordsPerMinute ?? undefined;
       answerResult = await submitAnswer(
