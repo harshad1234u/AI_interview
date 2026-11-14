@@ -1,6 +1,8 @@
 "use client";
 
+import React from "react";
 import type { Camera } from "@/components/interview/useExpressionCamera";
+import { useCameraTelemetry } from "@/components/interview/useExpressionCamera";
 
 type CandidateCameraProps = {
   camera: Camera;
@@ -8,12 +10,13 @@ type CandidateCameraProps = {
   voiceSpeaking: boolean;
 };
 
-export default function CandidateCamera({
+function CandidateCamera({
   camera,
   voiceListening,
   voiceSpeaking,
 }: CandidateCameraProps) {
-  const { state, message, label, breakdown, attach, enable } = camera;
+  const { state, message, attach, enable } = camera;
+  const { label, breakdown } = useCameraTelemetry(camera);
   const isVideoOn = state === "starting" || state === "loading" || state === "active";
 
   return (
@@ -128,3 +131,5 @@ export default function CandidateCamera({
     </section>
   );
 }
+
+export default React.memo(CandidateCamera);

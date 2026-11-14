@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import type { AnswerKind } from "@/lib/api";
 import { ANSWER_KIND_LABEL } from "@/lib/interview";
 import type { Camera } from "@/components/interview/useExpressionCamera";
@@ -16,7 +17,7 @@ type InterviewControlsProps = {
 
 const SECONDARY_KINDS: AnswerKind[] = ["CLARIFY", "DONT_KNOW", "SKIP"];
 
-export default function InterviewControls({
+function InterviewControls({
   camera,
   voice,
   onSend,
@@ -87,3 +88,5 @@ export default function InterviewControls({
     </footer>
   );
 }
+
+export default React.memo(InterviewControls);

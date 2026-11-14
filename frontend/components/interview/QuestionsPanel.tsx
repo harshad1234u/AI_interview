@@ -1,6 +1,6 @@
 "use client";
 
-import { type RefObject, useState } from "react";
+import React, { type RefObject, useMemo, useState } from "react";
 import type { QuestionView, TurnResult } from "@/lib/api";
 import {
   ANSWER_KIND_LABEL,
@@ -15,7 +15,7 @@ type QuestionsPanelProps = {
   questionRef: RefObject<HTMLParagraphElement | null>;
 };
 
-export default function QuestionsPanel({
+function QuestionsPanel({
   turn,
   historyQuestions,
   questionRef,
@@ -24,8 +24,9 @@ export default function QuestionsPanel({
   const q = turn?.question;
   const progress = turn?.progress;
 
-  const pastQuestions = historyQuestions.filter(
-    (item) => item.id !== q?.id && item.answer !== null,
+  const pastQuestions = useMemo(
+    () => historyQuestions.filter((item) => item.id !== q?.id && item.answer !== null),
+    [historyQuestions, q?.id]
   );
 
   return (
@@ -133,3 +134,5 @@ export default function QuestionsPanel({
     </aside>
   );
 }
+
+export default React.memo(QuestionsPanel);

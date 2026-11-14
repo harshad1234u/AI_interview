@@ -1,6 +1,8 @@
 "use client";
 
+import React from "react";
 import type { Camera } from "@/components/interview/useExpressionCamera";
+import { useCameraTelemetry } from "@/components/interview/useExpressionCamera";
 import { COPY } from "@/lib/interview";
 
 const STATUS: Record<Camera["state"], string> = {
@@ -12,13 +14,15 @@ const STATUS: Record<Camera["state"], string> = {
 };
 
 /** The optional camera for tech check and previews. */
-export default function CameraPanel({
-  camera: { state, message, label, breakdown, attach, enable, disable },
+function CameraPanel({
+  camera,
   intro = false,
 }: {
   camera: Camera;
   intro?: boolean;
 }) {
+  const { state, message, attach, enable, disable } = camera;
+  const { label, breakdown } = useCameraTelemetry(camera);
   const on = state === "starting" || state === "loading" || state === "active";
 
   return (
@@ -87,3 +91,5 @@ export default function CameraPanel({
     </section>
   );
 }
+
+export default React.memo(CameraPanel);

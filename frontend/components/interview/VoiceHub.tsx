@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import type { Voice } from "@/components/interview/useVoice";
 import {
   RATES,
@@ -24,7 +24,7 @@ type VoiceHubProps = {
   busy: boolean;
 };
 
-export default function VoiceHub({
+function VoiceHub({
   voice,
   questionText,
   disabled,
@@ -280,3 +280,5 @@ export default function VoiceHub({
     </section>
   );
 }
+
+export default React.memo(VoiceHub);

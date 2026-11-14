@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { TurnResult } from "@/lib/api";
 import { COPY, formatRemaining } from "@/lib/interview";
 
@@ -43,7 +43,7 @@ function CountdownDisplay({ turn, fetchedAt }: { turn: TurnResult | null; fetche
   );
 }
 
-export default function InterviewHeader({
+function InterviewHeader({
   attempt,
   turn,
   fetchedAt,
@@ -109,3 +109,5 @@ export default function InterviewHeader({
     </header>
   );
 }
+
+export default React.memo(InterviewHeader);
