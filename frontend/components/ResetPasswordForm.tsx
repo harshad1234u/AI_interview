@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, resetPassword } from "@/lib/api";
 import {
   PASSWORD_MAX_LENGTH,
@@ -28,6 +28,64 @@ export default function ResetPasswordForm() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState(false);
+
+  const passwordInputRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordInputRef = useRef<HTMLInputElement>(null);
+
+  const syncFormFromDom = useCallback(() => {
+    const p1 = passwordInputRef.current?.value;
+    const p2 = confirmPasswordInputRef.current?.value;
+    const updates: Partial<FormState> = {};
+    if (p1 && p1 !== form.password) updates.password = p1;
+    if (p2 && p2 !== form.confirmPassword) updates.confirmPassword = p2;
+    if (Object.keys(updates).length > 0) {
+      setForm((prev) => ({ ...prev, ...updates }));
+    }
+  }, [form.password, form.confirmPassword]);
+
+  const togglePasswordVisibility = useCallback(() => {
+    syncFormFromDom();
+    const input = passwordInputRef.current;
+    const hadFocus = input ? document.activeElement === input : false;
+    const start = input?.selectionStart ?? null;
+    const end = input?.selectionEnd ?? null;
+    const direction = input?.selectionDirection ?? undefined;
+
+    setShowPassword((prev) => !prev);
+
+    if (hadFocus && input && start !== null && end !== null) {
+      requestAnimationFrame(() => {
+        try {
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(start, end, direction);
+        } catch {
+          // Browser may restrict setSelectionRange on certain input types
+        }
+      });
+    }
+  }, [syncFormFromDom]);
+
+  const toggleConfirmPasswordVisibility = useCallback(() => {
+    syncFormFromDom();
+    const input = confirmPasswordInputRef.current;
+    const hadFocus = input ? document.activeElement === input : false;
+    const start = input?.selectionStart ?? null;
+    const end = input?.selectionEnd ?? null;
+    const direction = input?.selectionDirection ?? undefined;
+
+    setShowConfirmPassword((prev) => !prev);
+
+    if (hadFocus && input && start !== null && end !== null) {
+      requestAnimationFrame(() => {
+        try {
+          input.focus({ preventScroll: true });
+          input.setSelectionRange(start, end, direction);
+        } catch {
+          // Browser may restrict setSelectionRange on certain input types
+        }
+      });
+    }
+  }, [syncFormFromDom]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -90,7 +148,17 @@ export default function ResetPasswordForm() {
     e.preventDefault();
     setError(null);
 
-    const errors = validateResetPasswordForm(form);
+    const currentPassword = form.password || passwordInputRef.current?.value || "";
+    const currentConfirm = form.confirmPassword || confirmPasswordInputRef.current?.value || "";
+    const currentForm: FormState = {
+      password: currentPassword,
+      confirmPassword: currentConfirm,
+    };
+    if (currentPassword !== form.password || currentConfirm !== form.confirmPassword) {
+      setForm(currentForm);
+    }
+
+    const errors = validateResetPasswordForm(currentForm);
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
@@ -101,7 +169,7 @@ export default function ResetPasswordForm() {
 
     setBusy(true);
     try {
-      await resetPassword(accessToken, form.password);
+      await resetPassword(accessToken, currentForm.password);
       setSuccess(true);
       setForm({ password: "", confirmPassword: "" });
       setAccessToken(null); // Clear token from memory
@@ -216,6 +284,7 @@ export default function ResetPasswordForm() {
           <label htmlFor="new-password">New Password</label>
           <div className="password-input-wrapper">
             <input
+              ref={passwordInputRef}
               id="new-password"
               name="password"
               type={showPassword ? "text" : "password"}
@@ -225,6 +294,11 @@ export default function ResetPasswordForm() {
               maxLength={PASSWORD_MAX_LENGTH}
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
+              onFocus={(e) => {
+                if (e.target.value && e.target.value !== form.password) {
+                  setForm((prev) => ({ ...prev, password: e.target.value }));
+                }
+              }}
               aria-invalid={Boolean(fieldErrors.password)}
               aria-describedby={fieldErrors.password ? "password-error" : undefined}
               placeholder="••••••••"
@@ -233,8 +307,10 @@ export default function ResetPasswordForm() {
             <button
               type="button"
               className="password-toggle-btn"
-              onClick={() => setShowPassword((prev) => !prev)}
+              onClick={togglePasswordVisibility}
+              onMouseDown={(e) => e.preventDefault()}
               aria-label={showPassword ? "Hide password" : "Show password"}
+              aria-pressed={showPassword}
               title={showPassword ? "Hide password" : "Show password"}
               disabled={busy}
             >
@@ -262,6 +338,7 @@ export default function ResetPasswordForm() {
           <label htmlFor="confirm-password">Confirm Password</label>
           <div className="password-input-wrapper">
             <input
+              ref={confirmPasswordInputRef}
               id="confirm-password"
               name="confirmPassword"
               type={showConfirmPassword ? "text" : "password"}
@@ -271,6 +348,11 @@ export default function ResetPasswordForm() {
               maxLength={PASSWORD_MAX_LENGTH}
               value={form.confirmPassword}
               onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+              onFocus={(e) => {
+                if (e.target.value && e.target.value !== form.confirmPassword) {
+                  setForm((prev) => ({ ...prev, confirmPassword: e.target.value }));
+                }
+              }}
               aria-invalid={Boolean(fieldErrors.confirmPassword)}
               aria-describedby={fieldErrors.confirmPassword ? "confirm-password-error" : undefined}
               placeholder="••••••••"
@@ -279,8 +361,10 @@ export default function ResetPasswordForm() {
             <button
               type="button"
               className="password-toggle-btn"
-              onClick={() => setShowConfirmPassword((prev) => !prev)}
+              onClick={toggleConfirmPasswordVisibility}
+              onMouseDown={(e) => e.preventDefault()}
               aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+              aria-pressed={showConfirmPassword}
               title={showConfirmPassword ? "Hide password" : "Show password"}
               disabled={busy}
             >

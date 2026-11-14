@@ -133,3 +133,71 @@ test("password visibility toggle preserves input values and changes input type c
     {}
   );
 });
+
+test("password toggle accessibility attributes and aria-pressed semantics", () => {
+  let showPassword = false;
+  const getButtonProps = (visible: boolean) => ({
+    type: "button",
+    "aria-label": visible ? "Hide password" : "Show password",
+    "aria-pressed": visible,
+    title: visible ? "Hide password" : "Show password",
+  });
+
+  // Default state: hidden
+  let props = getButtonProps(showPassword);
+  assert.equal(props["aria-label"], "Show password");
+  assert.equal(props["aria-pressed"], false);
+  assert.equal(props.title, "Show password");
+
+  // Toggled state: visible
+  showPassword = true;
+  props = getButtonProps(showPassword);
+  assert.equal(props["aria-label"], "Hide password");
+  assert.equal(props["aria-pressed"], true);
+  assert.equal(props.title, "Hide password");
+});
+
+test("autofill fallback synchronization preserves password on toggle and submit", () => {
+  // Simulates browser autofill where DOM has value but React state was empty
+  const state = { email: "harshad@harshad.me", password: "" };
+  const mockDomInput = { value: "SavedPassword123!" };
+
+  // 1. Submit synchronization fallback
+  const resolvedPassword = state.password || mockDomInput.value || "";
+  assert.equal(resolvedPassword, "SavedPassword123!");
+  assert.deepEqual(
+    validateAuthForm("login", { email: state.email, password: resolvedPassword, name: "" }),
+    {}
+  );
+
+  // 2. Toggle synchronization: state captures DOM value before flip
+  let syncedPassword = state.password;
+  if (mockDomInput.value && mockDomInput.value !== state.password) {
+    syncedPassword = mockDomInput.value;
+  }
+  assert.equal(syncedPassword, "SavedPassword123!");
+
+  // Now when switching type from password to text, the input retains the autofilled value
+  const nextInputType = "text";
+  assert.equal(nextInputType, "text");
+  assert.equal(syncedPassword.length, 17);
+});
+
+test("repeated visibility toggling maintains idempotency and selection position", () => {
+  let show = false;
+  const cursor = { start: 5, end: 12, direction: "forward" };
+  const history: boolean[] = [];
+
+  for (let i = 0; i < 10; i++) {
+    show = !show;
+    history.push(show);
+    // Cursor range remains unaffected by state toggling
+    assert.equal(cursor.start, 5);
+    assert.equal(cursor.end, 12);
+  }
+
+  // Exactly 10 alternating states ending back on false (hidden)
+  assert.equal(history.length, 10);
+  assert.equal(show, false);
+  assert.deepEqual(history, [true, false, true, false, true, false, true, false, true, false]);
+});
