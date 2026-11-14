@@ -1,0 +1,134 @@
+{
+  "timestamp": "2026-11-14T03:56:17Z",
+  "database_queries": {
+    "Candidate Lookup by ID": {
+      "planning_time_ms": 7.393,
+      "execution_time_ms": 0.061,
+      "total_time_ms": 7.454,
+      "node_type": "Seq Scan",
+      "shared_hit_blocks": 1,
+      "shared_read_blocks": 0
+    },
+    "Candidate Lookup by Email": {
+      "planning_time_ms": 0.359,
+      "execution_time_ms": 0.086,
+      "total_time_ms": 0.445,
+      "node_type": "Seq Scan",
+      "shared_hit_blocks": 1,
+      "shared_read_blocks": 0
+    },
+    "Active Session Fetch": {
+      "planning_time_ms": 0.145,
+      "execution_time_ms": 0.061,
+      "total_time_ms": 0.206,
+      "node_type": "Index Scan",
+      "shared_hit_blocks": 1,
+      "shared_read_blocks": 0
+    },
+    "Questions in Session": {
+      "planning_time_ms": 8.987,
+      "execution_time_ms": 0.182,
+      "total_time_ms": 9.169,
+      "node_type": "Sort",
+      "shared_hit_blocks": 4,
+      "shared_read_blocks": 0
+    },
+    "Candidate Facts Extraction": {
+      "planning_time_ms": 12.275,
+      "execution_time_ms": 0.091,
+      "total_time_ms": 12.366,
+      "node_type": "Seq Scan",
+      "shared_hit_blocks": 2,
+      "shared_read_blocks": 0
+    },
+    "Evaluation Criteria Listing": {
+      "planning_time_ms": 2.65,
+      "execution_time_ms": 0.056,
+      "total_time_ms": 2.706,
+      "node_type": "Limit",
+      "shared_hit_blocks": 0,
+      "shared_read_blocks": 0
+    }
+  },
+  "ai_gateway": {
+    "Groq": {
+      "unpooled_avg_ms": 2301.79,
+      "initial_handshake_ms": 666.39,
+      "warm_reused_avg_ms": 512.13,
+      "saved_per_request_ms": 1789.66,
+      "speedup_factor": 4.49
+    },
+    "Gemini": {
+      "unpooled_avg_ms": 2048.73,
+      "initial_handshake_ms": 674.01,
+      "warm_reused_avg_ms": 97.12,
+      "saved_per_request_ms": 1951.61,
+      "speedup_factor": 21.1
+    }
+  },
+  "api_routes": {
+    "submit": {
+      "n": 6,
+      "mean": 102.01,
+      "median": 109.97,
+      "p90": 114.82,
+      "p95": 114.86,
+      "p99": 114.88,
+      "min": 61.47,
+      "max": 114.89
+    },
+    "next": {
+      "n": 6,
+      "mean": 94.25,
+      "median": 100.77,
+      "p90": 111.7,
+      "p95": 112.42,
+      "p99": 112.99,
+      "min": 63.25,
+      "max": 113.14
+    },
+    "history": {
+      "n": 6,
+      "mean": 55.41,
+      "median": 58.73,
+      "p90": 62.65,
+      "p95": 63.74,
+      "p99": 64.6,
+      "min": 36.48,
+      "max": 64.82
+    },
+    "report": {
+      "n": 0,
+      "mean": 0,
+      "median": 0,
+      "p90": 0,
+      "p95": 0,
+      "p99": 0,
+      "min": 0,
+      "max": 0
+    },
+    "legacy_turn": {
+      "n": 6,
+      "mean": 251.66,
+      "median": 273.19,
+      "p90": 278.58,
+      "p95": 279.55,
+      "p99": 280.32,
+      "min": 191.96,
+      "max": 280.52
+    },
+    "optimized_turn": {
+      "n": 6,
+      "mean": 196.26,
+      "median": 211.21,
+      "p90": 219.18,
+      "p95": 219.6,
+      "p99": 219.94,
+      "min": 138.76,
+      "max": 220.03
+    },
+    "savings_ms": 55.4,
+    "reduction_pct": 22.0,
+    "speedup": 1.28
+  }
+}
