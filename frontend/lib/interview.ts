@@ -306,3 +306,25 @@ export const COPY = {
 
 export const fill = (text: string, values: Record<string, string | number>) =>
   text.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? `{${key}}`));
+
+/** Performance instrumentation for interview turn transitions (metadata only, no PII). */
+export type TurnTransitionMetrics = {
+  submitAnswerMs: number;
+  nextQuestionMs: number;
+  historyRefreshMs?: number;
+  totalTurnMs: number;
+  uiBlockedMs: number;
+  requestCount: number;
+};
+
+export function recordTurnMetrics(metrics: TurnTransitionMetrics): void {
+  const target = typeof window !== "undefined" ? window : typeof globalThis !== "undefined" ? globalThis : null;
+  if (target) {
+    const win = target as unknown as {
+      __LAST_TURN_METRICS__?: TurnTransitionMetrics;
+      __TURN_METRICS_LOG__?: TurnTransitionMetrics[];
+    };
+    win.__LAST_TURN_METRICS__ = metrics;
+    win.__TURN_METRICS_LOG__ = [...(win.__TURN_METRICS_LOG__ || []), metrics].slice(-50);
+  }
+}
