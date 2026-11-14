@@ -208,17 +208,109 @@ class SensitiveDataRedactionFilter(logging.Filter):
         return True
 
 
+CONTEXT_DEFAULTS = {
+    "client_addr": "unknown",
+    "request_line": "-",
+    "status_code": "-",
+    "method": "-",
+    "path": "-",
+    "full_path": "-",
+    "http_version": "1.1",
+    "request_id": "-",
+    "duration": "-",
+    "duration_ms": "-",
+}
+
+
 class RedactingFormatter(logging.Formatter):
-    """Logging formatter that redacts credentials from final formatted log lines."""
+    """Logging formatter that redacts credentials and safely populates missing contextual fields."""
 
     def format(self, record: logging.LogRecord) -> str:
-        # Shallow-copy the record so mutations (like levelprefix fallback) do not affect
-        # other handlers processing the same LogRecord instance.
+        # Shallow-copy the record so mutations (like levelprefix or client_addr fallback)
+        # do not affect other handlers processing the same LogRecord instance.
         recordcopy = copy.copy(record)
+
+        # 1. Provide levelprefix fallback if missing (used in Uvicorn format strings)
+        levelname = getattr(recordcopy, "levelname", "INFO")
+        separator = " " * max(1, 8 - len(levelname))
         if not getattr(recordcopy, "levelprefix", None):
-            levelname = getattr(recordcopy, "levelname", "INFO")
-            separator = " " * max(1, 8 - len(levelname))
             recordcopy.levelprefix = f"{levelname}:{separator}"
+
+        # 2. Extract Uvicorn access log tuple from args if present:
+        # Uvicorn protocol calls access_logger.info('%s - "%s %s HTTP/%s" %d', client_addr, method, path, http_version, status_code)
+        if isinstance(recordcopy.args, (tuple, list)) and len(recordcopy.args) == 5:
+            raw_client, raw_method, raw_path, raw_ver, raw_status = recordcopy.args
+
+            if isinstance(raw_client, tuple) and len(raw_client) == 2:
+                norm_client = f"{raw_client[0]}:{raw_client[1]}"
+            elif raw_client is not None and str(raw_client).strip():
+                norm_client = str(raw_client).strip()
+            else:
+                norm_client = "unknown"
+
+            norm_method = str(raw_method).strip() if raw_method is not None else "-"
+            norm_path = str(raw_path).strip() if raw_path is not None else "-"
+            norm_ver = str(raw_ver).strip() if raw_ver is not None else "1.1"
+            norm_status = raw_status if raw_status is not None else "-"
+            norm_req_line = f"{norm_method} {norm_path} HTTP/{norm_ver}"
+
+            # Preserve existing structured fields if already present and valid; otherwise set from args
+            if not getattr(recordcopy, "client_addr", None):
+                recordcopy.client_addr = norm_client
+            if not getattr(recordcopy, "method", None):
+                recordcopy.method = norm_method
+            if not getattr(recordcopy, "path", None):
+                recordcopy.path = norm_path
+            if not getattr(recordcopy, "full_path", None):
+                recordcopy.full_path = norm_path
+            if not getattr(recordcopy, "http_version", None):
+                recordcopy.http_version = norm_ver
+            if getattr(recordcopy, "status_code", None) is None:
+                recordcopy.status_code = norm_status
+            if not getattr(recordcopy, "request_line", None):
+                recordcopy.request_line = norm_req_line
+
+            # Normalize recordcopy.args[0] on the copy so getMessage() also reflects non-empty client_addr
+            if raw_client != norm_client:
+                recordcopy.args = (norm_client, raw_method, raw_path, raw_ver, raw_status)
+
+        # 3. Ensure client_addr, request_line, and status_code are safe even if not set via args
+        if not getattr(recordcopy, "client_addr", None):
+            recordcopy.client_addr = "unknown"
+
+        if not getattr(recordcopy, "request_line", None):
+            method = getattr(recordcopy, "method", None)
+            path = getattr(recordcopy, "path", None)
+            if method and path:
+                ver = getattr(recordcopy, "http_version", "1.1")
+                recordcopy.request_line = f"{method} {path} HTTP/{ver}"
+            elif getattr(recordcopy, "msg", None):
+                recordcopy.request_line = recordcopy.getMessage()
+            else:
+                recordcopy.request_line = "-"
+
+        if getattr(recordcopy, "status_code", None) is None:
+            recordcopy.status_code = "-"
+
+        # 4. Fallback safe defaults for any missing format fields specified in the format string
+        fmt_str = getattr(self, "_fmt", "") or ""
+        if fmt_str:
+            for field in re.findall(r"%\(([^)]+)\)", fmt_str):
+                if not hasattr(recordcopy, field) or getattr(recordcopy, field) is None:
+                    if field == "client_addr":
+                        setattr(recordcopy, field, "unknown")
+                    elif field == "levelprefix":
+                        setattr(recordcopy, field, f"{levelname}:{separator}")
+                    else:
+                        setattr(recordcopy, field, CONTEXT_DEFAULTS.get(field, "-"))
+            for field in re.findall(r"\{([a-zA-Z0-9_]+)", fmt_str):
+                if not hasattr(recordcopy, field) or getattr(recordcopy, field) is None:
+                    if field == "client_addr":
+                        setattr(recordcopy, field, "unknown")
+                    elif field == "levelprefix":
+                        setattr(recordcopy, field, f"{levelname}:{separator}")
+                    else:
+                        setattr(recordcopy, field, CONTEXT_DEFAULTS.get(field, "-"))
 
         formatted = super().format(recordcopy)
         return redact_string(formatted)
@@ -233,8 +325,15 @@ def configure_logging(level: str) -> None:
         if h.formatter is not None and not isinstance(h.formatter, RedactingFormatter):
             fmt_str = getattr(h.formatter, "_fmt", "%(asctime)s %(levelname)s %(name)s: %(message)s")
             date_fmt = getattr(h.formatter, "datefmt", None)
+            style_char = "%"
+            if hasattr(h.formatter, "_style"):
+                default_fmt = getattr(h.formatter._style, "default_format", "%")
+                if default_fmt.startswith("{"):
+                    style_char = "{"
+                elif default_fmt.startswith("$"):
+                    style_char = "$"
             try:
-                h.setFormatter(RedactingFormatter(fmt_str, datefmt=date_fmt))
+                h.setFormatter(RedactingFormatter(fmt_str, datefmt=date_fmt, style=style_char))
             except Exception:
                 pass
 
