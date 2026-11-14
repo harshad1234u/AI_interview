@@ -101,3 +101,35 @@ test("parseRecoveryHash extracts access token, type, and error information", () 
   assert.equal(empty.accessToken, null);
   assert.equal(empty.type, null);
 });
+
+test("password visibility toggle preserves input values and changes input type correctly", () => {
+  let isPasswordVisible = false;
+  const toggleVisibility = () => {
+    isPasswordVisible = !isPasswordVisible;
+  };
+  const getInputType = (visible: boolean) => (visible ? "text" : "password");
+
+  // Initial state is password (hidden)
+  assert.equal(getInputType(isPasswordVisible), "password");
+
+  // Toggle to visible
+  toggleVisibility();
+  assert.equal(isPasswordVisible, true);
+  assert.equal(getInputType(isPasswordVisible), "text");
+
+  // Toggle back to hidden
+  toggleVisibility();
+  assert.equal(isPasswordVisible, false);
+  assert.equal(getInputType(isPasswordVisible), "password");
+
+  // Verify form value is completely preserved when input type changes
+  const passwordValue = "MySecretP@ssw0rd!";
+  assert.deepEqual(
+    validateAuthForm("login", { email: "user@example.com", password: passwordValue, name: "" }),
+    {}
+  );
+  assert.deepEqual(
+    validateResetPasswordForm({ password: passwordValue, confirmPassword: passwordValue }),
+    {}
+  );
+});

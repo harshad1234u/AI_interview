@@ -279,6 +279,12 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Startup expired session cleanup skipped: %s", exc)
     yield
+    # Shutdown: cleanly close AI gateway connection pools (Phase 2A)
+    try:
+        from app.ai.providers import aclose_model_gateway
+        await aclose_model_gateway()
+    except Exception as exc:
+        logger.warning("Error closing AI model gateway on shutdown: %s", exc)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

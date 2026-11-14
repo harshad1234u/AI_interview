@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     # Comma-separated, in order: the first is the primary, the rest are fallbacks.
     ai_providers: str = ""
     ai_timeout_seconds: float = Field(default=20, gt=0, le=120)  # per attempt
+    ai_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    ai_pool_max_keepalive: int = Field(default=20, ge=1, le=200)
+    ai_pool_max_connections: int = Field(default=50, ge=1, le=500)
+    ai_pool_keepalive_expiry: float = Field(default=30.0, gt=0, le=300)
     ai_max_retries: int = Field(default=1, ge=0, le=5)  # per provider, transient errors only
     ai_max_output_tokens: int = Field(default=8192, ge=256, le=32768)
     # Model-backed requests admitted per UTC day, across all candidates (services/limits.py).

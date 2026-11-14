@@ -263,3 +263,19 @@ class ModelGateway:
         if outcome.startswith(ErrorKind.AUTH):
             logger.error("Provider %s rejected its API key: check %s_API_KEY",
                          provider.name, provider.name.upper())
+
+    async def aclose(self) -> None:
+        """Closes all underlying provider clients cleanly."""
+        seen: set[Any] = set()
+        for providers in self.routes.values():
+            for provider in providers:
+                if provider not in seen:
+                    seen.add(provider)
+                    if hasattr(provider, "aclose") and callable(provider.aclose):
+                        await provider.aclose()
+
+    async def __aenter__(self) -> "ModelGateway":
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.aclose()

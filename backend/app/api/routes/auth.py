@@ -50,6 +50,7 @@ from app.schemas.candidate import (
     ResetPasswordRequest,
 )
 from app.services.auth import (
+    CandidateIdentityConflict,
     end_session,
     provision_or_get_candidate,
     rotate_session_refresh_token,
@@ -465,14 +466,18 @@ async def verify_email_confirm(
         user_meta = user.get("user_metadata") or {}
         name = user_meta.get("name") or user_meta.get("full_name") or "Candidate"
 
-        candidate = provision_or_get_candidate(db, auth_user_id=user_id, email=email, name=name)
-        raw_token = start_session(
-            db,
-            candidate_id=candidate.id,
-            auth_user_id=candidate.auth_user_id,
-            refresh_token=data.get("refresh_token"),
-        )
-        db.commit()
+        try:
+            candidate = provision_or_get_candidate(db, auth_user_id=user_id, email=email, name=name)
+            raw_token = start_session(
+                db,
+                candidate_id=candidate.id,
+                auth_user_id=candidate.auth_user_id,
+                refresh_token=data.get("refresh_token"),
+            )
+            db.commit()
+        except CandidateIdentityConflict:
+            logger.warning("Email verification identity conflict for user %s", user_id)
+            return _err_redirect("verification_invalid")
 
         target_url = f"{settings.frontend_url}/interview"
         if "application/json" in request.headers.get("accept", "") and "text/html" not in request.headers.get("accept", ""):
@@ -537,14 +542,20 @@ async def login(
     user_meta = user.get("user_metadata") or {}
     name = user_meta.get("name") or user_meta.get("full_name") or "Candidate"
 
-    candidate = provision_or_get_candidate(db, auth_user_id=user_id, email=email, name=name)
-    raw_token = start_session(
-        db,
-        candidate_id=candidate.id,
-        auth_user_id=candidate.auth_user_id,
-        refresh_token=data.get("refresh_token"),
-    )
-    db.commit()
+    try:
+        candidate = provision_or_get_candidate(db, auth_user_id=user_id, email=email, name=name)
+        raw_token = start_session(
+            db,
+            candidate_id=candidate.id,
+            auth_user_id=candidate.auth_user_id,
+            refresh_token=data.get("refresh_token"),
+        )
+        db.commit()
+    except CandidateIdentityConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An account with conflicting credentials already exists.",
+        ) from None
 
     set_session_cookie(response, raw_token, settings)
     return candidate
@@ -568,11 +579,11 @@ def google_oauth_start(
     state = generate_oauth_state()
     sealed_cookie_val = seal_oauth_state(state, verifier, settings.session_key_bytes)
 
-    redirect_to = f"{settings.fastapi_public_url}/api/auth/google/callback?state={state}"
+    redirect_to = f"{settings.fastapi_public_url}/api/auth/google/callback"
     auth_url = (
         f"{settings.supabase_url}/auth/v1/authorize?"
         f"provider=google&code_challenge={challenge}&code_challenge_method=s256&"
-        f"redirect_to={quote(redirect_to)}"
+        f"redirect_to={quote(redirect_to, safe='')}&state={state}"
     )
 
     redirect_resp = RedirectResponse(url=auth_url, status_code=status.HTTP_302_FOUND)
@@ -626,8 +637,8 @@ async def google_oauth_callback(
         return _error_redirect("oauth_cancelled")
 
     sealed_cookie = request.cookies.get(OAUTH_COOKIE)
-    if not sealed_cookie or not code or not state:
-        logger.warning("Missing OAuth callback parameters or state cookie")
+    if not sealed_cookie or not code:
+        logger.warning("Missing OAuth callback code or state cookie")
         return _error_redirect("oauth_missing_state")
 
     try:
@@ -636,7 +647,7 @@ async def google_oauth_callback(
         logger.warning("Failed to unseal OAuth state cookie: %s", exc)
         return _error_redirect("oauth_state_invalid")
 
-    if not hmac.compare_digest(state, expected_state):
+    if state is not None and not hmac.compare_digest(state, expected_state):
         logger.warning("OAuth state mismatch in callback")
         return _error_redirect("oauth_state_mismatch")
 
@@ -655,14 +666,18 @@ async def google_oauth_callback(
     user_meta = user.get("user_metadata") or {}
     name = user_meta.get("full_name") or user_meta.get("name") or "Candidate"
 
-    candidate = provision_or_get_candidate(db, auth_user_id=user_id, email=email, name=name)
-    raw_token = start_session(
-        db,
-        candidate_id=candidate.id,
-        auth_user_id=candidate.auth_user_id,
-        refresh_token=data.get("refresh_token"),
-    )
-    db.commit()
+    try:
+        candidate = provision_or_get_candidate(db, auth_user_id=user_id, email=email, name=name)
+        raw_token = start_session(
+            db,
+            candidate_id=candidate.id,
+            auth_user_id=candidate.auth_user_id,
+            refresh_token=data.get("refresh_token"),
+        )
+        db.commit()
+    except CandidateIdentityConflict as exc:
+        logger.warning("OAuth identity conflict for auth_user_id %s: %s", user_id, exc)
+        return _error_redirect("oauth_identity_conflict")
 
     redirect_resp = RedirectResponse(
         url=f"{settings.frontend_url}/",

@@ -1263,8 +1263,8 @@ def test_google_oauth_pkce_flow(client: TestClient, fake_supabase) -> None:
     from urllib.parse import parse_qs, urlparse
     parsed = urlparse(start_res.headers["location"])
     query_params = parse_qs(parsed.query)
-    redirect_to = query_params["redirect_to"][0]
-    state = parse_qs(urlparse(redirect_to).query)["state"][0]
+    assert query_params["redirect_to"][0] == f"{get_settings().fastapi_public_url}/api/auth/google/callback"
+    state = query_params["state"][0]
 
     # 3. Simulate callback
     client.cookies.set("oauth_session_flow", start_res.cookies["oauth_session_flow"])
