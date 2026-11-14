@@ -3,7 +3,7 @@
 // The optional camera: getUserMedia -> <video> -> a small face-expression model running in this
 // browser -> one class per sample -> counts per question. Frames are read from the video element
 // by the model and never copied, kept, logged or sent; only counts leave the browser.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BASE_INTERVAL_MS,
   type Counts,
@@ -20,6 +20,11 @@ import {
 
 export type CameraState = "off" | "starting" | "loading" | "active" | "unavailable";
 
+export type CameraTelemetry = {
+  label: string;
+  breakdown: { look: string; percent: number }[];
+};
+
 export type Camera = {
   state: CameraState;
   /** Why the camera is off or unavailable, in the candidate's words. */
@@ -27,6 +32,8 @@ export type Camera = {
   label: string;
   /** The recent samples as shares of looks, for the small live bar. */
   breakdown: { look: string; percent: number }[];
+  subscribeTelemetry: (callback: (telemetry: CameraTelemetry) => void) => () => void;
+  getTelemetry: () => CameraTelemetry;
   attach: (video: HTMLVideoElement | null) => void;
   enable: () => Promise<void>;
   disable: () => void;
@@ -66,7 +73,13 @@ type Entry = { counts: Counts; used: boolean; failed: boolean };
 export function useExpressionCamera(): Camera {
   const [state, setState] = useState<CameraState>("off");
   const [message, setMessage] = useState<string | null>(null);
-  const [recent, setRecent] = useState<ReturnType<typeof classify>[]>([]);
+
+  // Isolate high-frequency recent samples to ref and subscription listeners to prevent
+  // parent-level (InterviewFlow / InterviewTurn) re-renders on every 1000ms sample.
+  const recentRef = useRef<ReturnType<typeof classify>[]>([]);
+  const subscribersRef = useRef<Set<(telemetry: CameraTelemetry) => void>>(new Set());
+  const samplingRef = useRef(false);
+
   const stream = useRef<MediaStream | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
   const model = useRef<FaceApi | null>(null);
@@ -85,8 +98,28 @@ export function useExpressionCamera(): Camera {
     return e;
   };
 
+  const notifySubscribers = useCallback(() => {
+    const telemetry: CameraTelemetry = {
+      label: liveLabel(recentRef.current),
+      breakdown: liveBreakdown(recentRef.current),
+    };
+    subscribersRef.current.forEach((cb) => {
+      try {
+        cb(telemetry);
+      } catch {
+        // Protect sampling loop from subscriber exceptions
+      }
+    });
+  }, []);
+
+  const resetRecent = useCallback(() => {
+    recentRef.current = [];
+    notifySubscribers();
+  }, [notifySubscribers]);
+
   const stopStream = useCallback(() => {
     running.current = false;
+    samplingRef.current = false;
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     stream.current?.getTracks().forEach((t) => t.stop()); // the camera light goes off
@@ -103,38 +136,49 @@ export function useExpressionCamera(): Camera {
   }, [stopStream]);
 
   const sample = useCallback(async () => {
-    if (!running.current) return;
-    let delay = BASE_INTERVAL_MS;
-    const v = video.current;
-    // Nothing is analysed while paused, hidden or before frames arrive. With no question open
-    // (before the first, between two) the label previews, and nothing is counted.
-    if (model.current && v && v.readyState >= 2 && !paused.current && !document.hidden) {
-      const started = performance.now();
-      try {
-        const faceapi = model.current;
-        const found = await faceapi.detectAllFaces(
-          v, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })).withFaceExpressions();
-        const outcome = classify(found.map((f) => ({ expressions: f.expressions as unknown as Record<string, number> })));
-        const id = question.current;
-        if (id && running.current) {
-          const e = entry(id);
-          e.used = true;
-          e.counts = addSample(e.counts, outcome);
+    // Prevent overlapping asynchronous analysis requests or execution after shutdown
+    if (!running.current || samplingRef.current) return;
+    samplingRef.current = true;
+
+    try {
+      let delay = BASE_INTERVAL_MS;
+      const v = video.current;
+      // Nothing is analysed while paused, hidden or before frames arrive. With no question open
+      // (before the first, between two) the label previews, and nothing is counted.
+      if (model.current && v && v.readyState >= 2 && !paused.current && !document.hidden) {
+        const started = performance.now();
+        try {
+          const faceapi = model.current;
+          const found = await faceapi.detectAllFaces(
+            v, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })).withFaceExpressions();
+          const outcome = classify(found.map((f) => ({ expressions: f.expressions as unknown as Record<string, number> })));
+          const id = question.current;
+          if (id && running.current) {
+            const e = entry(id);
+            e.used = true;
+            e.counts = addSample(e.counts, outcome);
+          }
+          if (running.current) {
+            recentRef.current = [...recentRef.current.slice(-4), outcome];
+            notifySubscribers();
+          }
+        } catch {
+          return fail("Facial-expression analysis stopped working. The interview will continue normally.");
         }
-        if (running.current) setRecent((r) => [...r.slice(-4), outcome]);
-      } catch {
-        return fail("Facial-expression analysis stopped working. The interview will continue normally.");
+        const pace = nextPace(performance.now() - started, strikes.current);
+        strikes.current = pace.strikes;
+        if (pace.stop) {
+          return fail("This device is too slow for facial-expression analysis, so it was turned off. "
+                      + "The interview will continue normally.");
+        }
+        delay = pace.delay;
       }
-      const pace = nextPace(performance.now() - started, strikes.current);
-      strikes.current = pace.strikes;
-      if (pace.stop) {
-        return fail("This device is too slow for facial-expression analysis, so it was turned off. "
-                    + "The interview will continue normally.");
-      }
-      delay = pace.delay;
+      if (running.current) timer.current = setTimeout(() => tick.current(), delay);
+    } finally {
+      samplingRef.current = false;
     }
-    if (running.current) timer.current = setTimeout(() => tick.current(), delay);
-  }, [fail]);
+  }, [fail, notifySubscribers]);
+
   useEffect(() => {
     tick.current = sample;
   }, [sample]);
@@ -176,19 +220,19 @@ export function useExpressionCamera(): Camera {
     if (!stream.current) return; // disabled while loading
     strikes.current = 0;
     running.current = true;
-    setRecent([]);
+    resetRecent();
     if (question.current) entry(question.current).used = true;
     setState("active");
     timer.current = setTimeout(() => tick.current(), BASE_INTERVAL_MS);
-  }, [fail, state, stopStream]);
+  }, [fail, resetRecent, state, stopStream]);
 
   const disable = useCallback(() => {
     failed.current = false; // the candidate's choice: from now on, "not enabled"
     stopStream();
     setState("off");
     setMessage(null);
-    setRecent([]);
-  }, [stopStream]);
+    resetRecent();
+  }, [resetRecent, stopStream]);
 
   const attach = useCallback((el: HTMLVideoElement | null) => {
     video.current = el;
@@ -203,8 +247,8 @@ export function useExpressionCamera(): Camera {
     if (id && failed.current) entry(id).failed = true;
     // Shown while analysis runs: reported even with no sample ("insufficient visual data").
     if (id && running.current) entry(id).used = true;
-    setRecent([]);
-  }, []);
+    resetRecent();
+  }, [resetRecent]);
 
   const setPaused = useCallback((value: boolean) => {
     paused.current = value;
@@ -219,10 +263,87 @@ export function useExpressionCamera(): Camera {
     return e.used ? toObservation(e.counts, "ANALYZED") : null;
   }, []);
 
+  const subscribeTelemetry = useCallback((cb: (telemetry: CameraTelemetry) => void) => {
+    subscribersRef.current.add(cb);
+    cb({
+      label: liveLabel(recentRef.current),
+      breakdown: liveBreakdown(recentRef.current),
+    });
+    return () => {
+      subscribersRef.current.delete(cb);
+    };
+  }, []);
+
+  const getTelemetry = useCallback((): CameraTelemetry => {
+    return {
+      label: liveLabel(recentRef.current),
+      breakdown: liveBreakdown(recentRef.current),
+    };
+  }, []);
+
   // Leaving the interview (or the page) always releases the camera.
   useEffect(() => stopStream, [stopStream]);
 
-  return {
-    state, message, label: liveLabel(recent), breakdown: liveBreakdown(recent), attach, enable, disable, setQuestion, setPaused, take,
-  };
+  return useMemo<Camera>(
+    () => ({
+      state,
+      message,
+      get label() {
+        return liveLabel(recentRef.current);
+      },
+      get breakdown() {
+        return liveBreakdown(recentRef.current);
+      },
+      subscribeTelemetry,
+      getTelemetry,
+      attach,
+      enable,
+      disable,
+      setQuestion,
+      setPaused,
+      take,
+    }),
+    [
+      state,
+      message,
+      subscribeTelemetry,
+      getTelemetry,
+      attach,
+      enable,
+      disable,
+      setQuestion,
+      setPaused,
+      take,
+    ]
+  );
+}
+
+/**
+ * Lightweight subscriber hook for components rendering composure telemetry badges.
+ * Re-renders only the subscriber when label or breakdown values meaningfully change.
+ */
+export function useCameraTelemetry(camera: Camera): CameraTelemetry {
+  const [telemetry, setTelemetry] = useState<CameraTelemetry>(() =>
+    camera.getTelemetry ? camera.getTelemetry() : { label: camera.label, breakdown: camera.breakdown }
+  );
+
+  useEffect(() => {
+    if (!camera.subscribeTelemetry) return;
+    return camera.subscribeTelemetry((next) => {
+      setTelemetry((prev) => {
+        if (
+          prev.label === next.label &&
+          prev.breakdown.length === next.breakdown.length &&
+          prev.breakdown.every(
+            (b, i) => b.look === next.breakdown[i]?.look && b.percent === next.breakdown[i]?.percent
+          )
+        ) {
+          return prev;
+        }
+        return next;
+      });
+    });
+  }, [camera]);
+
+  return telemetry;
 }
