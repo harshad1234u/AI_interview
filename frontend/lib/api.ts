@@ -89,11 +89,18 @@ function toApiError(status: number, body: unknown): ApiError {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (status === 422 && Array.isArray(detail)) {
     const fieldErrors: Record<string, string> = {};
+    const messages: string[] = [];
     for (const issue of detail as ValidationIssue[]) {
       const field = issue.loc?.[1];
-      if (typeof field === "string" && issue.msg) fieldErrors[field] ??= issue.msg;
+      if (typeof field === "string" && issue.msg) {
+        fieldErrors[field] ??= issue.msg;
+        messages.push(`${field}: ${issue.msg}`);
+      } else if (issue.msg) {
+        messages.push(issue.msg);
+      }
     }
-    return new ApiError(status, "Please fix the highlighted fields.", fieldErrors);
+    const message = messages.length > 0 ? messages.join("; ") : "Please fix the highlighted fields.";
+    return new ApiError(status, message, fieldErrors);
   }
   // 503 details are written for users (DB down, AI unavailable); other 5xx stay generic.
   if (typeof detail === "string" && (status < 500 || status === 503)) {
@@ -652,8 +659,10 @@ export const submitAnswer = (
       question_id: questionId,
       kind,
       ...(kind === "ANSWER" ? { text } : {}),
-      ...(speech_duration_ms !== undefined && speech_duration_ms > 0 ? { speech_duration_ms } : {}),
-      ...(speech_wpm !== undefined && speech_wpm > 0 ? { speech_wpm } : {}),
+      ...(speech_duration_ms !== undefined && speech_duration_ms > 0
+        ? { speech_duration_ms: Math.round(speech_duration_ms) }
+        : {}),
+      ...(speech_wpm !== undefined && speech_wpm > 0 ? { speech_wpm: Math.round(speech_wpm) } : {}),
     }),
   );
 

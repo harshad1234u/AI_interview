@@ -47,3 +47,26 @@ def test_speech_metrics_persisted_and_reported(committed_interview: uuid.UUID) -
     assert speech_metrics["average_wpm"] == 135
     assert speech_metrics["spoken_answers_count"] == 1
     assert "about 135 words per minute" in speech_metrics["note"]
+
+
+def test_speech_metrics_accepts_floating_point_metrics(committed_interview: uuid.UUID) -> None:
+    """Verifies that floating-point speech duration and WPM from browser performance.now()
+    are gracefully coerced and rounded to integers rather than throwing a 422 validation error."""
+    sid_ = committed_interview
+    client = owner_client(sid_)
+
+    q1 = first_question(client, sid_)
+    res_ans = client.post(
+        f"/api/interview-sessions/{sid_}/answers",
+        json={
+            "question_id": q1["id"],
+            "kind": "ANSWER",
+            "text": "Floating point speech duration test from high-resolution browser performance timers.",
+            "speech_duration_ms": 23145.78,
+            "speech_wpm": 196.4,
+        },
+    )
+    assert res_ans.status_code == 200
+    answer_data = res_ans.json()
+    assert answer_data["question"]["speech_duration_ms"] == 23146
+    assert answer_data["question"]["speech_wpm"] == 196

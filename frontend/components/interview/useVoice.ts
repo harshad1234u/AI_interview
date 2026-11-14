@@ -181,7 +181,7 @@ export function useVoice(): Voice {
     if (startedAt.current) {
       listened.current += performance.now() - startedAt.current;
       startedAt.current = 0;
-      setListenedMs(listened.current);
+      setListenedMs(Math.round(listened.current));
     }
   }, []);
 

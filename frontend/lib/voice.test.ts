@@ -81,6 +81,16 @@ test("describeSpeech never judges: no confidence, nervous or good/bad wording", 
   assert.equal(describeSpeech(speechMetrics("typed only", 0)), "");
 });
 
+test("speechMetrics: handles floating point milliseconds accurately", () => {
+  const text = "I built an innovative cloud platform using modern React and FastAPI microservices";
+  const m = speechMetrics(text, 23145.789);
+  assert.equal(m.words, countWords(text));
+  assert.equal(m.seconds, 23);
+  assert.equal(m.tooShort, false);
+  assert.equal(typeof m.wordsPerMinute, "number");
+  assert.equal(m.wordsPerMinute, Math.round((m.words / 23145.789) * 60000));
+});
+
 test("recognition errors: a missing mic is final; no-speech is not a judgement", () => {
   assert.equal(recognitionErrorText("not-allowed").fatal, true);
   assert.equal(recognitionErrorText("audio-capture").fatal, true);
