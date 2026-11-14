@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type AnswerKind,
+  type AnswerResult,
   type ClientAction,
   type InterviewStatus,
   type QuestionView,
@@ -19,9 +20,11 @@ import type { Voice } from "@/components/interview/useVoice";
 import { appendTranscript, speechMetrics } from "@/lib/voice";
 import {
   COPY,
+  type TurnTransitionMetrics,
   errorText,
   isConflict,
   isNetworkError,
+  recordTurnMetrics,
   screenFor,
 } from "@/lib/interview";
 import InterviewHeader from "@/components/interview/InterviewHeader";
@@ -59,30 +62,45 @@ export default function InterviewTurn({
   const [error, setError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState(false);
   const questionRef = useRef<HTMLParagraphElement>(null);
+  const submittingRef = useRef(false);
+  const historySeqRef = useRef(0);
 
-  // Load session questions history for the left panel
-  const loadHistory = useCallback(async () => {
+  // Load session questions history for the left panel (non-blocking background sync)
+  const loadHistory = useCallback(async (): Promise<number> => {
+    const seq = ++historySeqRef.current;
+    const t0 = performance.now();
     try {
       const hist = await getQuestions(sessionId);
-      if (hist?.questions) setHistoryQuestions(hist.questions);
+      if (seq === historySeqRef.current && hist?.questions) {
+        setHistoryQuestions(hist.questions);
+      }
+      return Math.round(performance.now() - t0);
     } catch {
-      // Non-critical background fetch: ignore error
+      // Non-critical background fetch: ignore error gracefully
+      return Math.round(performance.now() - t0);
     }
   }, [sessionId]);
 
   const loadNext = useCallback(async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setBusy(true);
     setError(null);
     try {
       const result = await nextQuestion(sessionId);
-      if (result.question === null) return onStatus(result.status); // finished: feedback next
+      if (result.question === null) {
+        onStatus(result.status); // finished: feedback next
+        return;
+      }
       setFetchedAt(Date.now());
       setTurn(result);
-      await loadHistory();
+      // Independent non-blocking background history refresh
+      loadHistory();
     } catch (err) {
       setError(errorText(err));
       if (isConflict(err)) setBlocked(true);
     } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   }, [sessionId, onStatus, loadHistory]);
@@ -169,17 +187,24 @@ export default function InterviewTurn({
   }, [paused, silence]);
 
   async function send(kind: AnswerKind) {
-    if (!turn?.question) return;
+    if (submittingRef.current || busy || blocked || !turn?.question) return;
+    submittingRef.current = true;
     silence();
     setBusy(true);
     setError(null);
+
+    const tStart = performance.now();
+    const answeredQuestion = turn.question;
+    let answerResult: AnswerResult;
+
+    // STEP 1: Submit and persist the answer
     try {
       const speechDuration = voice.listenedMs > 0 ? voice.listenedMs : undefined;
       const metrics = kind === "ANSWER" && speechDuration ? speechMetrics(draft, speechDuration) : null;
       const speechWpm = metrics?.wordsPerMinute ?? undefined;
-      await submitAnswer(
+      answerResult = await submitAnswer(
         sessionId,
-        turn.question.id,
+        answeredQuestion.id,
         kind,
         kind === "ANSWER" ? draft : undefined,
         speechDuration,
@@ -188,16 +213,76 @@ export default function InterviewTurn({
     } catch (err) {
       setError(isNetworkError(err) ? COPY.networkKept : errorText(err));
       if (isConflict(err)) setBlocked(true);
+      submittingRef.current = false;
       setBusy(false);
       return;
     }
+
+    const tSubmitEnd = performance.now();
+    const submitDuration = Math.round(tSubmitEnd - tStart);
+
+    // Answer safely confirmed and persisted on the backend
     setDraft(""); // dropped only after server saves
-    const observation = camera.take(turn.question.id);
+    const observation = camera.take(answeredQuestion.id);
     if (observation) {
-      saveExpressionObservation(sessionId, turn.question.id, observation).catch(() => {});
+      saveExpressionObservation(sessionId, answeredQuestion.id, observation).catch(() => {});
     }
-    setTurn(null);
-    await loadNext();
+
+    // Optimistically update history sidebar immediately with server-confirmed QuestionView
+    if (answerResult?.question) {
+      setHistoryQuestions((prev) => {
+        const idx = prev.findIndex((q) => q.id === answerResult.question.id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = answerResult.question;
+          return next;
+        }
+        return [...prev, answerResult.question];
+      });
+    }
+
+    // STEP 2: Request next question (only after successful answer persistence)
+    try {
+      const result = await nextQuestion(sessionId);
+      const tNextEnd = performance.now();
+      const nextDuration = Math.round(tNextEnd - tSubmitEnd);
+      const totalTurnMs = Math.round(tNextEnd - tStart);
+
+      if (result.question === null) {
+        onStatus(result.status); // finished: feedback next
+        submittingRef.current = false;
+        setBusy(false);
+        return;
+      }
+
+      // STEP 3: Display next question immediately and unblock UI!
+      setFetchedAt(Date.now());
+      setTurn(result);
+      submittingRef.current = false;
+      setBusy(false);
+
+      // Record performance timing instrumentation
+      const turnMetrics: TurnTransitionMetrics = {
+        submitAnswerMs: submitDuration,
+        nextQuestionMs: nextDuration,
+        totalTurnMs,
+        uiBlockedMs: totalTurnMs,
+        requestCount: 2,
+      };
+      recordTurnMetrics(turnMetrics);
+
+      // STEP 4: Independent non-blocking background history refresh
+      loadHistory().then((histDuration) => {
+        turnMetrics.historyRefreshMs = histDuration;
+        recordTurnMetrics({ ...turnMetrics });
+      });
+    } catch (err) {
+      // Next question failed after answer was saved: show recoverable error without losing saved answer
+      setError(errorText(err));
+      if (isConflict(err)) setBlocked(true);
+      submittingRef.current = false;
+      setBusy(false);
+    }
   }
 
   async function act(action: ClientAction, confirmText?: string) {
@@ -239,7 +324,6 @@ export default function InterviewTurn({
           </button>
         </div>
       ) : (
-        !turn?.question &&
         !paused && (
           <div className="actions">
             <button type="button" className="primary" onClick={loadNext} disabled={busy}>
